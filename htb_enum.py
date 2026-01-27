@@ -1,28 +1,22 @@
 #!/usr/bin/env python3
 """
-HTB Enumeration Tool v1.0rc1
-Author: @KhaosShield
+HTB Enumeration Tool v1.0
+Author: Automated Enumeration Script
 Description: Comprehensive enumeration tool for HackTheBox labs
 """
 
 import subprocess
 import sys
 import re
-import json
 import argparse
 import os
-from pathlib import Path
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
 
 try:
     from rich.console import Console
     from rich.table import Table
     from rich.panel import Panel
     from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
-    from rich.markdown import Markdown
-    from rich.tree import Tree
     from rich import box
 except ImportError:
     print("[!] Error: 'rich' library not found. Installing...")
@@ -31,8 +25,6 @@ except ImportError:
     from rich.table import Table
     from rich.panel import Panel
     from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
-    from rich.markdown import Markdown
-    from rich.tree import Tree
     from rich import box
 
 console = Console()
@@ -50,6 +42,8 @@ class Config:
         self.threads = 50
         self.scan_depth = 2
         self.start_time = datetime.now()
+        self.skip_current = False
+        self.commands_run = []  # Track all commands executed
         
         # Tool paths
         self.tools = {
@@ -96,8 +90,8 @@ def banner():
     """Display tool banner"""
     banner_text = """
     ╔═══════════════════════════════════════════════════════════╗
-    ║               HTB Enumeration Tool v1.0rc1                ║
-    ║       Comprehensive Auto Enumeration @KhaosShield         ║
+    ║         HTB Enumeration Tool v1.0                         ║
+    ║         Comprehensive Lab Enumeration Suite               ║
     ╚═══════════════════════════════════════════════════════════╝
     """
     console.print(banner_text, style="bold cyan")
@@ -141,10 +135,25 @@ def tool_exists(tool):
     """Check if a tool exists in PATH"""
     return subprocess.run(['which', tool], capture_output=True).returncode == 0
 
-def run_command(cmd, description="", timeout=None):
-    """Run a shell command and return output"""
+def run_command(cmd, description="", timeout=None, show_command=True):
+    """Run a shell command and return output with progress tracking"""
     try:
-        console.print(f"[cyan]→[/cyan] {description}", style="dim")
+        # Log the command
+        command_entry = {
+            'command': cmd,
+            'description': description,
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        config.commands_run.append(command_entry)
+        
+        # Show what we're running
+        if show_command:
+            console.print(f"\n[bold cyan]Running:[/bold cyan] [dim]{description}[/dim]")
+            console.print(f"[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
+            console.print("[dim]Press Ctrl+C to skip to next phase[/dim]\n")
+        else:
+            console.print(f"[cyan]→[/cyan] {description}", style="dim")
+        
         result = subprocess.run(
             cmd,
             shell=True,
@@ -153,6 +162,10 @@ def run_command(cmd, description="", timeout=None):
             timeout=timeout
         )
         return result.stdout, result.stderr, result.returncode
+    except KeyboardInterrupt:
+        console.print(f"\n[yellow]⊘ Skipped: {description}[/yellow]")
+        config.skip_current = True
+        return "", "Skipped by user", -2
     except subprocess.TimeoutExpired:
         console.print(f"[red]✗ Command timed out: {description}[/red]")
         return "", "Timeout", -1
@@ -160,16 +173,50 @@ def run_command(cmd, description="", timeout=None):
         console.print(f"[red]✗ Error running command: {e}[/red]")
         return "", str(e), -1
 
-def save_output(filename, content):
-    """Save command output to file"""
+def save_output(filename, content, command=None):
+    """Save command output to file with command header"""
     filepath = os.path.join(config.output_dir, filename)
+    
+    # Prepare output with command header
+    output_content = ""
+    
+    if command:
+        output_content += "=" * 80 + "\n"
+        output_content += "COMMAND EXECUTED\n"
+        output_content += "=" * 80 + "\n"
+        output_content += f"Command: {command}\n"
+        output_content += f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        output_content += f"Target: {config.target_ip}\n"
+        output_content += "=" * 80 + "\n\n"
+    
+    output_content += content
+    
+    with open(filepath, 'w') as f:
+        f.write(output_content)
+    return filepath
     with open(filepath, 'w') as f:
         f.write(content)
     return filepath
 
-def add_to_report(section, content):
-    """Add content to markdown report"""
+def add_to_report(section, content, commands=None, found_items=None):
+    """Add content to markdown report with command tracking"""
     config.markdown_report.append(f"\n## {section}\n")
+    
+    # Add commands if provided
+    if commands:
+        config.markdown_report.append("### Commands Executed\n\n")
+        if isinstance(commands, list):
+            for cmd in commands:
+                config.markdown_report.append(f"```bash\n{cmd}\n```\n")
+        else:
+            config.markdown_report.append(f"```bash\n{commands}\n```\n")
+        config.markdown_report.append("\n")
+    
+    # Add findings
+    if found_items is not None and found_items == 0:
+        config.markdown_report.append("### Results\n\n")
+        config.markdown_report.append("**Status:** Nothing found\n\n")
+    
     config.markdown_report.append(content)
 
 def get_target_ip():
@@ -215,28 +262,49 @@ def create_output_directory():
 def nmap_basic_scan():
     """Run initial Nmap port scan"""
     console.print(Panel.fit(
-        "[bold cyan]Phase 1: Initial Port Discovery[/bold cyan]",
+        "[bold cyan]Phase 1: Initial Port Discovery[/bold cyan]\n[dim]Press Ctrl+C during scan to skip to next phase[/dim]",
         border_style="cyan"
     ))
     
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        console=console
-    ) as progress:
-        task = progress.add_task("[cyan]Running Nmap port scan...", total=None)
-        
-        # Fast SYN scan for all ports
-        cmd = f"nmap -p- -T4 --min-rate=1000 -Pn {config.target_ip}"
-        
-        if config.stealth_mode:
-            cmd = f"nmap -p- -T2 -Pn {config.target_ip}"
-        
-        stdout, stderr, code = run_command(cmd, "Initial port discovery", timeout=600)
-        progress.update(task, completed=100)
+    # Fast SYN scan for all ports
+    cmd = f"nmap -p- -T4 --min-rate=1000 -Pn {config.target_ip}"
     
-    save_output("nmap_initial.txt", stdout)
+    if config.stealth_mode:
+        cmd = f"nmap -p- -T2 -Pn {config.target_ip}"
+    
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=console
+        ) as progress:
+            task = progress.add_task("[cyan]Scanning all 65535 ports...", total=100)
+            
+            # Show the command
+            console.print(f"\n[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
+            console.print("[dim]This may take 5-10 minutes...[/dim]\n")
+            
+            stdout, stderr, code = run_command(cmd, "Initial port discovery", timeout=600, show_command=False)
+            progress.update(task, completed=100)
+        
+        if code == -2:  # Skipped
+            console.print("[yellow]Phase 1 skipped by user[/yellow]")
+            add_to_report("Phase 1: Initial Port Discovery", 
+                         "**Status:** Skipped by user\n", 
+                         commands=cmd, 
+                         found_items=0)
+            return []
+    except KeyboardInterrupt:
+        console.print("\n[yellow]⊘ Skipping to next phase...[/yellow]")
+        add_to_report("Phase 1: Initial Port Discovery", 
+                     "**Status:** Skipped by user\n", 
+                     commands=cmd, 
+                     found_items=0)
+        return []
+    
+    save_output("nmap_initial.txt", stdout, command=cmd)
     
     # Parse open ports
     ports = re.findall(r'(\d+)/tcp\s+open', stdout)
@@ -251,7 +319,7 @@ def nmap_basic_scan():
         table.add_row(", ".join(ports), str(len(ports)))
         console.print(table)
         
-        add_to_report("Open Ports Discovery", f"""
+        add_to_report("Phase 1: Initial Port Discovery", f"""
 **Discovered {len(ports)} open ports:**
 
 ```
@@ -262,7 +330,15 @@ def nmap_basic_scan():
 ```
 {stdout[:2000]}...
 ```
-""")
+""", commands=cmd, found_items=len(ports))
+    else:
+        console.print("[yellow]No open ports found in initial scan[/yellow]")
+        add_to_report("Phase 1: Initial Port Discovery", 
+                     "**Status:** No open ports discovered\n", 
+                     commands=cmd, 
+                     found_items=0)
+    
+    return list(config.discovered_ports.keys())
     else:
         console.print("[yellow]No open ports found in initial scan[/yellow]")
     
@@ -293,10 +369,10 @@ def nmap_detailed_scan(ports):
     
     save_output("nmap_detailed.txt", stdout)
     
-    
+    # Parse service information
     parse_nmap_output(stdout)
     
-    
+    # Display results
     display_service_table()
     
     add_to_report("Detailed Service Enumeration", f"""
@@ -959,12 +1035,28 @@ def web_technology_detection():
             target = config.discovered_hosts[0] if config.discovered_hosts else config.target_ip
             url = f"{protocol}://{target}:{port}" if port not in ['80', '443'] else f"{protocol}://{target}"
             
-            cmd = f"whatweb -a 3 {url}"
+            cmd = f"whatweb --no-colour -a 3 {url}"
             stdout, stderr, code = run_command(cmd, f"Technology detection: {url}")
             
             if stdout:
-                console.print(f"\n[green]Technologies on {url}:[/green]")
-                console.print(stdout[:500])
+                # Clean up the output for better readability
+                output_lines = stdout.strip().split('\n')
+                console.print(f"\n[green]Technologies detected on {url}:[/green]")
+                
+                # Parse and display in a cleaner format
+                for line in output_lines:
+                    if line.strip():
+                        # Extract key information
+                        if '[' in line:
+                            # Split by commas and display key findings
+                            parts = line.split(',')
+                            for part in parts[:10]:  # Limit to first 10 items
+                                part = part.strip()
+                                if part and '[' in part:
+                                    console.print(f"  • {part}")
+                        else:
+                            console.print(f"  {line.strip()}")
+                
                 save_output(f"whatweb_port{port}.txt", stdout)
 
 def nikto_scan():
@@ -1350,6 +1442,7 @@ def generate_markdown_report():
 - **End Time:** {end_time.strftime("%Y-%m-%d %H:%M:%S")}
 - **Duration:** {duration}
 - **Output Directory:** {config.output_dir}
+- **Commands Executed:** {len(config.commands_run)}
 
 ---
 
@@ -1357,6 +1450,29 @@ def generate_markdown_report():
     
     # Add all collected sections
     report += "\n".join(config.markdown_report)
+    
+    # Add commands executed section
+    report += """
+
+---
+
+## All Commands Executed
+
+This section lists every command that was run during the enumeration for reproducibility.
+
+"""
+    
+    for idx, cmd_entry in enumerate(config.commands_run, 1):
+        report += f"""
+### Command {idx}: {cmd_entry['description']}
+
+**Timestamp:** {cmd_entry['timestamp']}
+
+```bash
+{cmd_entry['command']}
+```
+
+"""
     
     # Add summary
     report += f"""
@@ -1368,6 +1484,7 @@ def generate_markdown_report():
 - **Open Ports:** {len(config.discovered_ports)}
 - **Discovered Hostnames:** {len(config.discovered_hosts)}
 - **Services Enumerated:** {len([s for s in config.discovered_ports.values() if s.get('service')])}
+- **Total Commands Run:** {len(config.commands_run)}
 
 ## Discovered Hostnames
 
@@ -1407,7 +1524,7 @@ Based on the enumeration, consider:
 def main():
     """Main execution flow"""
     parser = argparse.ArgumentParser(
-        description="HTB Enumeration Tool v1.0rc1",
+        description="HTB Enumeration Tool v1.0",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument('-t', '--target', help='Target IP address')
