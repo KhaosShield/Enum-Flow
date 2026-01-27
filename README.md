@@ -14,14 +14,6 @@
 
 ---
 
-## Legal Disclaimer
-
-**FOR EDUCATIONAL AND AUTHORIZED TESTING ONLY**
-
-This tool is designed for authorized penetration testing, HackTheBox/CTF platforms, security research, and educational purposes. You are responsible for obtaining proper authorization and complying with all applicable laws. Unauthorized access to computer systems is illegal. The authors assume no liability for misuse.
-
----
-
 ## Overview
 
 A Python-based enumeration tool that automates reconnaissance for HackTheBox labs and CTF challenges. It conducts systematic enumeration across multiple attack vectors, generates detailed reports, and integrates popular security tools into a single workflow.
@@ -50,7 +42,7 @@ A Python-based enumeration tool that automates reconnaissance for HackTheBox lab
 - NetBIOS and RPC enumeration  
 - Impacket-based Kerberos attacks
 
-See [ADVANCED_ENUMERATION.md](ADVANCED_ENUMERATION.md) for detailed information.
+--- 
 
 ## Requirements
 
@@ -93,35 +85,7 @@ cd htb-enum
 chmod +x install.sh
 sudo ./install.sh
 ```
-
-### Manual Installation
-
-**Install required tools:**
-```bash
-sudo apt update
-sudo apt install -y nmap gobuster
-
-# Install NetExec
-sudo apt install -y pipx
-pipx install git+https://github.com/Pennyw0rth/NetExec
-```
-
-**Install optional tools:**
-```bash
-sudo apt install -y feroxbuster ffuf smbclient smbmap ldap-utils \
-    dnsutils dnsenum whatweb enum4linux-ng nikto wpscan testssl.sh \
-    sslscan nbtscan onesixtyone snmp nfs-common impacket-scripts
-```
-
-**Install SecLists wordlists:**
-```bash
-sudo apt install -y seclists
-```
-
-**Install Python dependencies:**
-```bash
-pip install rich --break-system-packages
-```
+--- 
 
 ## Usage
 
@@ -254,6 +218,8 @@ Default configuration uses:
 - Scan depth: 2 levels (configurable during runtime)
 - Wordlists: SecLists default wordlists
 
+--- 
+
 ## Tips
 
 - Always start with the automated scan to establish baseline reconnaissance
@@ -262,6 +228,8 @@ Default configuration uses:
 - Reduce thread count if experiencing rate limiting
 - Collected credentials should be tested across all discovered services
 - Check for version-specific CVEs in discovered services
+
+--- 
 
 ## Troubleshooting
 
@@ -280,17 +248,6 @@ Reduce thread count with `--threads 10`.
 **NetExec not working**  
 Verify installation: `netexec --version` or `nxc --version`
 
-## Contributing
-
-Contributions are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-Areas for contribution:
-- Additional service enumeration modules
-- Performance optimizations
-- Documentation improvements
-- Bug reports and fixes
-- Feature requests
-
 ## License
 
 MIT License - See [LICENSE](LICENSE) file for details.
@@ -303,12 +260,6 @@ This tool integrates and automates popular security tools:
 - NetExec by Pennyw0rth
 - SecLists by Daniel Miessler
 - Rich library by Will McGugan
-
-## Support
-
-- Issues: GitHub Issues
-- Documentation: See docs directory
-- Community: HackTheBox forums
 
 ---
 
