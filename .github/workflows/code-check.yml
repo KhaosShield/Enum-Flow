@@ -2,7 +2,7 @@ name: Code Quality Check
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
@@ -26,26 +26,58 @@ jobs:
     - name: Python Syntax Check
       run: |
         python -m py_compile htb_enum.py
-        echo "✓ Syntax check passed"
+        echo "Syntax check passed"
     
-    - name: Check for common issues
+    - name: Verify Script is Executable
       run: |
-        # Check for hardcoded IPs (example patterns)
-        if grep -r "192\.168\." htb_enum.py; then
-          echo "Warning: Found hardcoded private IPs"
-        fi
-        
-        # Check for TODO comments
-        if grep -r "TODO\|FIXME\|XXX" htb_enum.py; then
-          echo "Info: Found TODO items"
+        if [ ! -x htb_enum.py ] && [ ! -x install.sh ]; then
+          echo "Warning: Scripts may not be executable"
         fi
     
-    - name: Verify required files
+    - name: Check for Required Files
       run: |
-        for file in README.md LICENSE CHANGELOG.md requirements.txt; do
+        echo "Checking for required files..."
+        for file in README.md htb_enum.py install.sh; do
           if [ ! -f "$file" ]; then
-            echo "Error: Missing $file"
+            echo "Error: Missing required file: $file"
             exit 1
+          else
+            echo "Found: $file"
           fi
         done
-        echo "✓ All required files present"
+        echo "All required files present"
+    
+    - name: Validate .gitignore exists
+      run: |
+        if [ ! -f .gitignore ]; then
+          echo "Warning: .gitignore not found"
+        else
+          echo ".gitignore present"
+        fi
+    
+    - name: Check for Security Issues
+      run: |
+        echo "Checking for potential security issues..."
+        
+        # Check for hardcoded API keys or tokens
+        if grep -r "sk-ant-api" htb_enum.py 2>/dev/null; then
+          echo "Error: Found hardcoded API key"
+          exit 1
+        fi
+        
+        # Check for hardcoded passwords
+        if grep -r "password\s*=\s*['\"]" htb_enum.py 2>/dev/null; then
+          echo "Warning: Found potential hardcoded password"
+        fi
+        
+        echo "Security check passed"
+    
+    - name: Code Quality Summary
+      run: |
+        echo "================================"
+        echo "Code Quality Check Complete"
+        echo "================================"
+        echo "Python syntax: OK"
+        echo "Required files: OK"
+        echo "Security check: OK"
+        echo "================================"

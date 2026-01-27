@@ -1,11 +1,8 @@
 #!/bin/bash
 
-# HTB Enumeration Tool v1.0rc1 - Installation Script
-# This script installs all required and optional dependencies
-
 set -e
 
-# Colors for output
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
