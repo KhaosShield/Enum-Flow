@@ -339,10 +339,6 @@ def nmap_basic_scan():
                      found_items=0)
     
     return list(config.discovered_ports.keys())
-    else:
-        console.print("[yellow]No open ports found in initial scan[/yellow]")
-    
-    return list(config.discovered_ports.keys())
 
 def nmap_detailed_scan(ports):
     """Run detailed Nmap scan on discovered ports"""
