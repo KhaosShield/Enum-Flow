@@ -1,0 +1,97 @@
+# HTB Enumeration Tool - Git Ignore
+
+# Output directories (IP addresses)
+[0-9]*.[0-9]*.[0-9]*.[0-9]*/
+*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Scan outputs and sensitive data
+*.pcap
+*.cap
+*.pcapng
+passwords.txt
+hashes.txt
+credentials.txt
+usernames.txt
+wordlist_custom.txt
+asrep_hashes.txt
+kerberoast_hashes.txt
+secrets.txt
+
+# Tool-specific outputs
+nuclei_targets.txt
+snmp_communities.txt
+
+# Logs
+*.log
+debug.log
+error.log
+scan.log
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# Don't ignore example files
+!examples/
