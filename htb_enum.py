@@ -11,6 +11,13 @@ import re
 import argparse
 import os
 from datetime import datetime
+import select
+import signal
+import signal
+import threading
+import termios
+import tty
+import select
 
 try:
     from rich.console import Console
@@ -44,6 +51,8 @@ class Config:
         self.start_time = datetime.now()
         self.skip_current = False
         self.commands_run = []  # Track all commands executed
+        self.phase_skipped = False  # Track if current phase was skipped
+        self.skip_requested = False  # Flag for Ctrl+S skip request
         
         # Tool paths
         self.tools = {
@@ -86,12 +95,36 @@ class Config:
 
 config = Config()
 
+def run_phase(phase_func, phase_name, *args, **kwargs):
+    """Execute a phase with skip capability"""
+    config.skip_requested = False
+    config.phase_skipped = False
+    
+    try:
+        result = phase_func(*args, **kwargs)
+        
+        # Check if phase was skipped
+        if config.skip_requested or config.phase_skipped:
+            console.print(f"[yellow]⊘ Skipped {phase_name}[/yellow]\n")
+            add_to_report(phase_name, "**Status:** Skipped by user\n", found_items=0)
+            config.skip_requested = False  # Reset for next phase
+            return None
+            
+        return result
+    except KeyboardInterrupt:
+        # Ctrl+C exits entire script
+        raise
+    except Exception as e:
+        console.print(f"[red]Error in {phase_name}: {e}[/red]")
+        return None
+
 def banner():
     """Display tool banner"""
     banner_text = """
     ╔═══════════════════════════════════════════════════════════╗
     ║         HTB Enumeration Tool v1.0                         ║
-    ║         Comprehensive Lab Enumeration Suite               ║
+    ║         Comprehensive Lab Enumeration Suite               ║ 
+    ║         GitHub - @KhaosShield                             ║
     ╚═══════════════════════════════════════════════════════════╝
     """
     console.print(banner_text, style="bold cyan")
@@ -136,7 +169,7 @@ def tool_exists(tool):
     return subprocess.run(['which', tool], capture_output=True).returncode == 0
 
 def run_command(cmd, description="", timeout=None, show_command=True):
-    """Run a shell command and return output with progress tracking"""
+    """Run a shell command and return output with progress tracking and Ctrl+S skip support"""
     try:
         # Log the command
         command_entry = {
@@ -150,25 +183,59 @@ def run_command(cmd, description="", timeout=None, show_command=True):
         if show_command:
             console.print(f"\n[bold cyan]Running:[/bold cyan] [dim]{description}[/dim]")
             console.print(f"[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
-            console.print("[dim]Press Ctrl+C to skip to next phase[/dim]\n")
         else:
             console.print(f"[cyan]→[/cyan] {description}", style="dim")
         
-        result = subprocess.run(
+        # Check if skip was already requested
+        if config.skip_requested:
+            console.print("[yellow]Skipping due to user request...[/yellow]")
+            config.phase_skipped = True
+            return "", "Skipped", -2
+        
+        # Run command as subprocess so we can monitor for Ctrl+S
+        process = subprocess.Popen(
             cmd,
             shell=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
         )
-        return result.stdout, result.stderr, result.returncode
+        
+        # Poll process while checking for skip request
+        import time
+        start_time = time.time()
+        while process.poll() is None:
+            # Check for skip request
+            if config.skip_requested:
+                console.print("\n[yellow]⊘ Skipping - terminating current command...[/yellow]")
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except:
+                    process.kill()
+                config.phase_skipped = True
+                return "", "Skipped by user", -2
+            
+            # Check for timeout
+            if timeout and (time.time() - start_time) > timeout:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except:
+                    process.kill()
+                console.print(f"[red]✗ Command timed out: {description}[/red]")
+                return "", "Timeout", -1
+            
+            time.sleep(0.1)  # Check every 100ms
+        
+        stdout, stderr = process.communicate()
+        return stdout, stderr, process.returncode
+        
     except KeyboardInterrupt:
-        console.print(f"\n[yellow]⊘ Skipped: {description}[/yellow]")
-        config.skip_current = True
-        return "", "Skipped by user", -2
-    except subprocess.TimeoutExpired:
-        console.print(f"[red]✗ Command timed out: {description}[/red]")
-        return "", "Timeout", -1
+        # Ctrl+C exits entire script
+        if 'process' in locals():
+            process.terminate()
+        raise
     except Exception as e:
         console.print(f"[red]✗ Error running command: {e}[/red]")
         return "", str(e), -1
@@ -262,7 +329,7 @@ def create_output_directory():
 def nmap_basic_scan():
     """Run initial Nmap port scan"""
     console.print(Panel.fit(
-        "[bold cyan]Phase 1: Initial Port Discovery[/bold cyan]\n[dim]Press Ctrl+C during scan to skip to next phase[/dim]",
+        "[bold cyan]Phase 1: Initial Port Discovery[/bold cyan]",
         border_style="cyan"
     ))
     
@@ -272,37 +339,22 @@ def nmap_basic_scan():
     if config.stealth_mode:
         cmd = f"nmap -p- -T2 -Pn {config.target_ip}"
     
-    try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            console=console
-        ) as progress:
-            task = progress.add_task("[cyan]Scanning all 65535 ports...", total=100)
-            
-            # Show the command
-            console.print(f"\n[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
-            console.print("[dim]This may take 5-10 minutes...[/dim]\n")
-            
-            stdout, stderr, code = run_command(cmd, "Initial port discovery", timeout=600, show_command=False)
-            progress.update(task, completed=100)
+    # Run the scan
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        console=console
+    ) as progress:
+        task = progress.add_task("[cyan]Scanning all 65535 ports...", total=100)
         
-        if code == -2:  # Skipped
-            console.print("[yellow]Phase 1 skipped by user[/yellow]")
-            add_to_report("Phase 1: Initial Port Discovery", 
-                         "**Status:** Skipped by user\n", 
-                         commands=cmd, 
-                         found_items=0)
-            return []
-    except KeyboardInterrupt:
-        console.print("\n[yellow]⊘ Skipping to next phase...[/yellow]")
-        add_to_report("Phase 1: Initial Port Discovery", 
-                     "**Status:** Skipped by user\n", 
-                     commands=cmd, 
-                     found_items=0)
-        return []
+        # Show the command
+        console.print(f"\n[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
+        console.print("[dim]This may take 5-10 minutes. Press Ctrl+S to skip to next phase.[/dim]\n")
+        
+        stdout, stderr, code = run_command(cmd, "Initial port discovery", timeout=600, show_command=False)
+        progress.update(task, completed=100)
     
     save_output("nmap_initial.txt", stdout, command=cmd)
     
@@ -1032,28 +1084,67 @@ def web_technology_detection():
             url = f"{protocol}://{target}:{port}" if port not in ['80', '443'] else f"{protocol}://{target}"
             
             cmd = f"whatweb --no-colour -a 3 {url}"
-            stdout, stderr, code = run_command(cmd, f"Technology detection: {url}")
+            stdout, stderr, code = run_command(cmd, f"Technology detection: {url}", show_command=False)
             
             if stdout:
-                # Clean up the output for better readability
-                output_lines = stdout.strip().split('\n')
                 console.print(f"\n[green]Technologies detected on {url}:[/green]")
                 
-                # Parse and display in a cleaner format
-                for line in output_lines:
-                    if line.strip():
-                        # Extract key information
-                        if '[' in line:
-                            # Split by commas and display key findings
-                            parts = line.split(',')
-                            for part in parts[:10]:  # Limit to first 10 items
-                                part = part.strip()
-                                if part and '[' in part:
-                                    console.print(f"  • {part}")
-                        else:
-                            console.print(f"  {line.strip()}")
+                # Parse whatweb output
+                # Format: http://example.com [200 OK] Country[US], HTTPServer[nginx/1.18.0], Title[Example]
                 
-                save_output(f"whatweb_port{port}.txt", stdout)
+                try:
+                    # Extract the main findings part (after the URL and status)
+                    if '[' in stdout:
+                        # Split by URL and status code
+                        parts = stdout.split(']', 1)
+                        if len(parts) > 1:
+                            # Get everything after first ]
+                            tech_string = parts[1].strip()
+                            if tech_string.startswith(','):
+                                tech_string = tech_string[1:].strip()
+                            
+                            # Split by commas but respect brackets
+                            technologies = []
+                            current = ""
+                            bracket_depth = 0
+                            
+                            for char in tech_string:
+                                if char == '[':
+                                    bracket_depth += 1
+                                elif char == ']':
+                                    bracket_depth -= 1
+                                elif char == ',' and bracket_depth == 0:
+                                    if current.strip():
+                                        technologies.append(current.strip())
+                                    current = ""
+                                    continue
+                                current += char
+                            
+                            if current.strip():
+                                technologies.append(current.strip())
+                            
+                            # Display in a clean format
+                            for tech in technologies:
+                                if tech:
+                                    # Extract technology name and details
+                                    if '[' in tech:
+                                        tech_name = tech.split('[')[0].strip()
+                                        tech_details = tech.split('[')[1].split(']')[0] if ']' in tech else ""
+                                        if tech_details:
+                                            console.print(f"  [cyan]•[/cyan] {tech_name}: [yellow]{tech_details}[/yellow]")
+                                        else:
+                                            console.print(f"  [cyan]•[/cyan] {tech_name}")
+                                    else:
+                                        console.print(f"  [cyan]•[/cyan] {tech}")
+                    else:
+                        # Fallback: just show first line cleaned up
+                        console.print(f"  {stdout.split(chr(10))[0]}")
+                        
+                except Exception as e:
+                    # If parsing fails, show raw output (cleaned)
+                    console.print(f"  [dim]{stdout[:200]}...[/dim]")
+                
+                save_output(f"whatweb_port{port}.txt", stdout, command=cmd)
 
 def nikto_scan():
     """Run Nikto web vulnerability scanner"""
@@ -1554,45 +1645,65 @@ def main():
     # Create output directory
     create_output_directory()
     
+    # Start keyboard monitoring thread for Ctrl+S
+    import threading
+    def monitor_keyboard():
+        """Monitor for Ctrl+S input"""
+        while True:
+            try:
+                # Use select to check if input is available (non-blocking)
+                if select.select([sys.stdin], [], [], 0.1)[0]:
+                    char = sys.stdin.read(1)
+                    # Ctrl+S is ASCII 19 (0x13)
+                    if ord(char) == 19:
+                        config.skip_requested = True
+                        console.print("\n[yellow]⊘ Skip requested (Ctrl+S) - will skip after current command finishes[/yellow]")
+            except:
+                pass
+    
+    # Start monitoring in background
+    monitor_thread = threading.Thread(target=monitor_keyboard, daemon=True)
+    monitor_thread.start()
+    
     try:
         # Phase 1: Initial port discovery
-        open_ports = nmap_basic_scan()
+        open_ports = run_phase(nmap_basic_scan, "Phase 1: Initial Port Discovery")
         
         if not open_ports:
             console.print("[red]No open ports found. Exiting.[/red]")
             sys.exit(0)
         
         # Phase 2: Detailed service enumeration
-        nmap_detailed_scan(open_ports)
+        run_phase(nmap_detailed_scan, "Phase 2: Service Detection", open_ports)
         
         # Phase 3: Update hosts file if needed
         if config.discovered_hosts:
-            update_hosts_file()
+            run_phase(update_hosts_file, "Phase 3: Hostname Integration")
         
         # Phase 4: SSL certificate analysis
-        analyze_ssl_certificates()
+        run_phase(analyze_ssl_certificates, "Phase 4: SSL Analysis")
         
         # Phase 5: Web enumeration
         if '80' in config.discovered_ports or '443' in config.discovered_ports:
             for port in ['80', '443', '8080', '8443']:
                 if port in config.discovered_ports:
-                    enumerate_web_directories(port)
+                    run_phase(enumerate_web_directories, f"Phase 5: Web Directory Enumeration (Port {port})", port)
             
-            enumerate_vhosts()
-            web_technology_detection()
+            run_phase(enumerate_vhosts, "Phase 5: VHOST Discovery")
+            run_phase(web_technology_detection, "Phase 5: Web Technology Detection")
         
         # Phase 6: DNS enumeration
-        enumerate_dns()
+        run_phase(enumerate_dns, "Phase 6: DNS Enumeration")
         
         # Phase 7: Active Directory enumeration
-        enumerate_active_directory()
+        run_phase(enumerate_active_directory, "Phase 7: Active Directory Enumeration")
         
         # Phase 8: SMB enumeration
-        enumerate_smb()
+        run_phase(enumerate_smb, "Phase 8: SMB Enumeration")
         
         # Phase 9: Additional services
         if not args.quick:
-            enumerate_additional_services()
+            run_phase(enumerate_additional_services, "Phase 9: Additional Services")
         
         # Phase 10: Advanced Web Enumeration
         if '80' in config.discovered_ports or '443' in config.discovered_ports:
@@ -1601,10 +1712,10 @@ def main():
                     "[bold cyan]Phase 10: Advanced Web Enumeration[/bold cyan]",
                     border_style="cyan"
                 ))
-                nikto_scan()
-                cms_detection()
-                ssl_vulnerability_scan()
-                vulnerability_scanning()
+                run_phase(nikto_scan, "Phase 10: Nikto Scan")
+                run_phase(cms_detection, "Phase 10: CMS Detection")
+                run_phase(ssl_vulnerability_scan, "Phase 10: SSL Vulnerability Scan")
+                run_phase(vulnerability_scanning, "Phase 10: Nuclei Vulnerability Scan")
         
         # Phase 11: Protocol-Specific Deep Enumeration
         if not args.quick:
@@ -1612,11 +1723,11 @@ def main():
                 "[bold cyan]Phase 11: Protocol-Specific Deep Enumeration[/bold cyan]",
                 border_style="cyan"
             ))
-            nfs_enumeration()
-            snmp_enumeration()
-            netbios_enumeration()
-            rpc_enumeration()
-            impacket_enumeration()
+            run_phase(nfs_enumeration, "Phase 11: NFS Enumeration")
+            run_phase(snmp_enumeration, "Phase 11: SNMP Enumeration")
+            run_phase(netbios_enumeration, "Phase 11: NetBIOS Enumeration")
+            run_phase(rpc_enumeration, "Phase 11: RPC Enumeration")
+            run_phase(impacket_enumeration, "Phase 11: Impacket Enumeration")
         
         # Generate final report
         report_path = generate_markdown_report()
