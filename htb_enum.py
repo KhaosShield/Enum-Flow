@@ -52,7 +52,7 @@ class Config:
         self.skip_current = False
         self.commands_run = []  # Track all commands executed
         self.phase_skipped = False  # Track if current phase was skipped
-        self.skip_requested = False  # Flag for Ctrl+S skip request
+        self.skip_requested = False  # Flag for Ctrl+Z skip request
         
         # Tool paths
         self.tools = {
@@ -95,6 +95,11 @@ class Config:
 
 config = Config()
 
+def handle_skip_signal(signum, frame):
+    """Handle SIGTSTP (Ctrl+Z) to skip phase - we'll remap Ctrl+Z behavior"""
+    config.skip_requested = True
+    console.print("\n[yellow]⊘ Skip requested - finishing current command then moving to next phase...[/yellow]")
+
 def run_phase(phase_func, phase_name, *args, **kwargs):
     """Execute a phase with skip capability"""
     config.skip_requested = False
@@ -123,8 +128,7 @@ def banner():
     banner_text = """
     ╔═══════════════════════════════════════════════════════════╗
     ║         HTB Enumeration Tool v1.0                         ║
-    ║         Comprehensive Lab Enumeration Suite               ║ 
-    ║         GitHub - @KhaosShield                             ║
+    ║         Comprehensive Lab Enumeration Suite               ║
     ╚═══════════════════════════════════════════════════════════╝
     """
     console.print(banner_text, style="bold cyan")
@@ -169,7 +173,7 @@ def tool_exists(tool):
     return subprocess.run(['which', tool], capture_output=True).returncode == 0
 
 def run_command(cmd, description="", timeout=None, show_command=True):
-    """Run a shell command and return output with progress tracking and Ctrl+S skip support"""
+    """Run a shell command and return output with progress tracking and Ctrl+Z skip support"""
     try:
         # Log the command
         command_entry = {
@@ -192,7 +196,7 @@ def run_command(cmd, description="", timeout=None, show_command=True):
             config.phase_skipped = True
             return "", "Skipped", -2
         
-        # Run command as subprocess so we can monitor for Ctrl+S
+        # Run command as subprocess so we can monitor for Ctrl+Z
         process = subprocess.Popen(
             cmd,
             shell=True,
@@ -326,6 +330,33 @@ def create_output_directory():
 - **Output Directory:** {config.output_dir}
 """)
 
+def update_output_directory_with_hostname():
+    """Rename output directory to use hostname instead of IP"""
+    if not config.discovered_hosts:
+        return
+    
+    # Get first hostname and extract machine name (before first dot)
+    full_hostname = config.discovered_hosts[0]
+    machine_name = full_hostname.split('.')[0].lower()
+    
+    # New directory name
+    new_dirname = machine_name
+    new_output_dir = os.path.join(os.getcwd(), new_dirname)
+    
+    # Check if new name would conflict
+    if os.path.exists(new_output_dir) and new_output_dir != config.output_dir:
+        console.print(f"[yellow]Directory '{new_dirname}' already exists, keeping IP-based name[/yellow]")
+        return
+    
+    # Rename directory
+    try:
+        old_dir = config.output_dir
+        os.rename(config.output_dir, new_output_dir)
+        config.output_dir = new_output_dir
+        console.print(f"[green]✓[/green] Renamed output directory: [cyan]{old_dir}[/cyan] → [cyan]{new_output_dir}[/cyan]\n")
+    except Exception as e:
+        console.print(f"[yellow]Could not rename directory: {e}[/yellow]")
+
 def nmap_basic_scan():
     """Run initial Nmap port scan"""
     console.print(Panel.fit(
@@ -351,7 +382,7 @@ def nmap_basic_scan():
         
         # Show the command
         console.print(f"\n[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
-        console.print("[dim]This may take 5-10 minutes. Press Ctrl+S to skip to next phase.[/dim]\n")
+        console.print("[dim]This may take 5-10 minutes. [bold yellow]Press Ctrl+Z to skip this phase.[/bold yellow][/dim]\n")
         
         stdout, stderr, code = run_command(cmd, "Initial port discovery", timeout=600, show_command=False)
         progress.update(task, completed=100)
@@ -401,18 +432,20 @@ def nmap_detailed_scan(ports):
     
     port_list = ",".join(ports)
     
+    cmd = f"nmap -p{port_list} -sV -sC -A -Pn -T4 -oN {config.output_dir}/nmap_detailed.txt {config.target_ip}"
+    console.print(f"\n[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
+    console.print("[dim]Running detailed service scan. [bold yellow]Press Ctrl+Z to skip this phase.[/bold yellow][/dim]\n")
+    
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         console=console
     ) as progress:
-        task = progress.add_task("[cyan]Running detailed service scan...", total=None)
+        task = progress.add_task("[cyan]Scanning services on discovered ports...", total=100)
         
-        # Detailed scan with scripts and version detection
-        cmd = f"nmap -p{port_list} -sV -sC -A -Pn -T4 -oN {config.output_dir}/nmap_detailed.txt {config.target_ip}"
-        
-        stdout, stderr, code = run_command(cmd, "Detailed port enumeration", timeout=900)
+        stdout, stderr, code = run_command(cmd, "Detailed port enumeration", timeout=900, show_command=False)
         progress.update(task, completed=100)
     
     save_output("nmap_detailed.txt", stdout)
@@ -458,6 +491,10 @@ def parse_nmap_output(output):
             if hostname not in config.discovered_hosts:
                 config.discovered_hosts.append(hostname)
                 console.print(f"[green]✓[/green] Found hostname: [bold]{hostname}[/bold]")
+                
+                # Rename output directory to use hostname (only on first discovery)
+                if len(config.discovered_hosts) == 1:
+                    update_output_directory_with_hostname()
 
 def display_service_table():
     """Display discovered services in a formatted table"""
@@ -559,24 +596,30 @@ def enumerate_web_directories(port='80'):
     
     console.print(f"[cyan]Target URL:[/cyan] {base_url}\n")
     
+    # Gobuster command
+    output_file = f"{config.output_dir}/gobuster_port{port}.txt"
+    # Remove -q flag to show progress, keep output to file
+    cmd = f"gobuster dir -u {base_url} -w {wordlist} -t {config.threads} -o {output_file} -r --no-error"
+    
+    if depth > 1:
+        cmd += f" -d {depth}"
+    
+    # Add common extensions
+    cmd += " -x php,html,txt,asp,aspx,jsp"
+    
+    console.print(f"\n[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
+    console.print(f"[dim]Scanning {wordlist}. [bold yellow]Press Ctrl+Z to skip this phase.[/bold yellow][/dim]\n")
+    
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         console=console
     ) as progress:
-        task = progress.add_task("[cyan]Scanning directories...", total=None)
+        task = progress.add_task(f"[cyan]Scanning directories (depth: {depth})...", total=100)
         
-        # Gobuster command
-        output_file = f"{config.output_dir}/gobuster_port{port}.txt"
-        cmd = f"gobuster dir -u {base_url} -w {wordlist} -t {config.threads} -o {output_file} -q -r --no-error"
-        
-        if depth > 1:
-            cmd += f" -d {depth}"
-        
-        # Add common extensions
-        cmd += " -x php,html,txt,asp,aspx,jsp"
-        
-        stdout, stderr, code = run_command(cmd, f"Gobuster directory scan (depth: {depth})", timeout=1800)
+        stdout, stderr, code = run_command(cmd, f"Gobuster directory scan", timeout=1800, show_command=False)
         progress.update(task, completed=100)
     
     # Parse and display results
@@ -804,6 +847,10 @@ def analyze_ssl_certificates():
                             console.print(f"  • {name}")
                             if name not in config.discovered_hosts:
                                 config.discovered_hosts.append(name)
+                                
+                                # Rename directory if this is first hostname discovered
+                                if len(config.discovered_hosts) == 1:
+                                    update_output_directory_with_hostname()
                 
                 save_output(f"ssl_cert_port{port}.txt", stdout)
 
@@ -1645,25 +1692,14 @@ def main():
     # Create output directory
     create_output_directory()
     
-    # Start keyboard monitoring thread for Ctrl+S
-    import threading
-    def monitor_keyboard():
-        """Monitor for Ctrl+S input"""
-        while True:
-            try:
-                # Use select to check if input is available (non-blocking)
-                if select.select([sys.stdin], [], [], 0.1)[0]:
-                    char = sys.stdin.read(1)
-                    # Ctrl+S is ASCII 19 (0x13)
-                    if ord(char) == 19:
-                        config.skip_requested = True
-                        console.print("\n[yellow]⊘ Skip requested (Ctrl+S) - will skip after current command finishes[/yellow]")
-            except:
-                pass
+    # Set up signal handler for Ctrl+Z to skip phases
+    signal.signal(signal.SIGTSTP, handle_skip_signal)
     
-    # Start monitoring in background
-    monitor_thread = threading.Thread(target=monitor_keyboard, daemon=True)
-    monitor_thread.start()
+    # Info message about controls
+    console.print("\n[bold cyan]═══ Controls ═══[/bold cyan]")
+    console.print("[yellow]Ctrl+C[/yellow] = Exit entire script")
+    console.print("[yellow]Ctrl+Z[/yellow] = Skip current phase (then type 'fg' + Enter to continue)")
+    console.print("═" * 40 + "\n")
     
     try:
         # Phase 1: Initial port discovery
