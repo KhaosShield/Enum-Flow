@@ -13,7 +13,7 @@ NC='\033[0m' # No Color
 echo -e "${BLUE}"
 cat << "EOF"
 ╔═══════════════════════════════════════════════════════════╗
-║     HTB Enumeration Tool v1.0rc1 - Installer              ║
+║     HTB Enumeration Tool v1.0 - Installer              ║
 ╚═══════════════════════════════════════════════════════════╝
 EOF
 echo -e "${NC}"
@@ -88,6 +88,12 @@ OPTIONAL_TOOLS=(
     "nfs-common"
     "nuclei"
     "impacket-scripts"
+    "sqlmap"
+    "joomscan"
+    "responder"
+    "ssh-audit"
+    "sshpass"
+    "samba-common-bin"
 )
 
 for tool in "${OPTIONAL_TOOLS[@]}"; do
@@ -111,8 +117,23 @@ fi
 
 # Install Python dependencies
 echo -e "\n${BLUE}[*] Installing Python dependencies...${NC}"
-pip3 install rich --break-system-packages > /dev/null 2>&1
-echo -e "${GREEN}[✓]${NC} Python dependencies installed"
+pip3 install rich bloodhound --break-system-packages > /dev/null 2>&1
+echo -e "${GREEN}[✓]${NC} Python dependencies installed (rich, bloodhound-python)"
+
+# Install Kerbrute (Go binary from GitHub)
+echo -e "\n${BLUE}[*] Installing Kerbrute...${NC}"
+if command -v kerbrute &> /dev/null; then
+    echo -e "${GREEN}[✓]${NC} Kerbrute already installed"
+else
+    echo -e "${YELLOW}[+]${NC} Downloading Kerbrute..."
+    KERBRUTE_URL="https://github.com/ropnop/kerbrute/releases/latest/download/kerbrute_linux_amd64"
+    if curl -sL "$KERBRUTE_URL" -o /usr/local/bin/kerbrute 2>/dev/null; then
+        chmod +x /usr/local/bin/kerbrute
+        echo -e "${GREEN}[✓]${NC} Kerbrute installed"
+    else
+        echo -e "${RED}[✗]${NC} Kerbrute installation failed (optional)"
+    fi
+fi
 
 # Make script executable
 echo -e "\n${BLUE}[*] Setting up HTB Enumeration Tool...${NC}"
