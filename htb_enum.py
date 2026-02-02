@@ -2266,7 +2266,7 @@ def main():
 
             # Restore original target and generate final report
             config.target_ip = original_target
-            generate_report()
+            generate_markdown_report()
             console.print(f"\n[green]✓ Enumeration complete! Results saved to: {config.output_dir}[/green]")
             sys.exit(0)
 
