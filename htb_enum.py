@@ -49,6 +49,8 @@ class Config:
         self.commands_run = []  # Track all commands executed
         self.phase_skipped = False  # Track if current phase was skipped
         self.skip_requested = False  # Flag for Ctrl+Z skip request
+        self.live_hosts = []  # Live hosts discovered in network range
+        self.is_range_scan = False  # Flag for network range scanning
         
         # Tool paths
         self.tools = {
@@ -308,6 +310,73 @@ def validate_target(target):
             return True
 
     return False
+
+def is_network_range(target):
+    """Check if target is a CIDR or range (not a single IP)"""
+    return '/' in target or re.match(r'^(\d{1,3}\.){3}\d{1,3}-\d{1,3}$', target)
+
+def discover_live_hosts():
+    """Discover live hosts in a network range using ping sweep"""
+    console.print(Panel.fit(
+        "[bold cyan]Phase 0: Host Discovery[/bold cyan]",
+        border_style="cyan"
+    ))
+
+    cmd = f"nmap -sn -T4 {config.target_ip}"
+
+    console.print(f"\n[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
+    console.print("[dim]Discovering live hosts in network range. [bold yellow]Press Ctrl+Z to skip.[/bold yellow][/dim]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        console=console
+    ) as progress:
+        task = progress.add_task("[cyan]Scanning for live hosts...", total=100)
+
+        stdout, stderr, code = run_command(cmd, "Host discovery", timeout=300, show_command=False)
+        progress.update(task, completed=100)
+
+    save_output("host_discovery.txt", stdout, command=cmd)
+
+    # Parse discovered hosts
+    live_hosts = re.findall(r'Nmap scan report for (\d+\.\d+\.\d+\.\d+)', stdout)
+
+    if live_hosts:
+        # Store in config for later use
+        config.live_hosts = live_hosts
+
+        table = Table(title="Discovered Live Hosts", box=box.ROUNDED)
+        table.add_column("#", style="dim", justify="center", width=4)
+        table.add_column("IP Address", style="cyan")
+        table.add_column("Status", style="green")
+
+        for idx, host in enumerate(live_hosts, 1):
+            table.add_row(str(idx), host, "Up")
+
+        console.print(table)
+        console.print(f"\n[green]✓[/green] Found [bold]{len(live_hosts)}[/bold] live host(s)\n")
+
+        add_to_report("Phase 0: Host Discovery", f"""
+**Network Range:** {config.target_ip}
+**Live Hosts Found:** {len(live_hosts)}
+
+| # | IP Address |
+|---|------------|
+{chr(10).join(f'| {i+1} | {h} |' for i, h in enumerate(live_hosts))}
+
+""", commands=cmd, found_items=len(live_hosts))
+
+        return live_hosts
+    else:
+        console.print("[yellow]No live hosts discovered in range[/yellow]")
+        add_to_report("Phase 0: Host Discovery",
+                     f"**Status:** No live hosts found in {config.target_ip}\n",
+                     commands=cmd,
+                     found_items=0)
+        return []
 
 def get_target_ip():
     """Prompt user for target IP address, CIDR, or range"""
@@ -2112,11 +2181,96 @@ def main():
     console.print("[yellow]Ctrl+C[/yellow] = Exit entire script")
     console.print("[yellow]Ctrl+Z[/yellow] = Skip current phase (then type 'fg' + Enter to continue)")
     console.print("═" * 40 + "\n")
-    
+
     try:
+        # Check if target is a network range - do host discovery first
+        if is_network_range(config.target_ip):
+            config.is_range_scan = True
+            live_hosts = run_phase(discover_live_hosts, "Phase 0: Host Discovery")
+
+            if not live_hosts:
+                console.print("[red]No live hosts found in range. Exiting.[/red]")
+                sys.exit(0)
+
+            # Let user choose which host to enumerate
+            console.print("\n[bold cyan]═══ Host Selection ═══[/bold cyan]")
+            console.print("Enter host number to enumerate, 'all' for all hosts, or 'q' to quit:")
+            for idx, host in enumerate(live_hosts, 1):
+                console.print(f"  [cyan]{idx}[/cyan]: {host}")
+
+            selection = console.input("\n[bold yellow]Select host(s):[/bold yellow] ").strip().lower()
+
+            if selection == 'q':
+                console.print("[yellow]Exiting.[/yellow]")
+                sys.exit(0)
+            elif selection == 'all':
+                hosts_to_scan = live_hosts
+            else:
+                try:
+                    idx = int(selection) - 1
+                    if 0 <= idx < len(live_hosts):
+                        hosts_to_scan = [live_hosts[idx]]
+                    else:
+                        console.print("[red]Invalid selection. Exiting.[/red]")
+                        sys.exit(1)
+                except ValueError:
+                    console.print("[red]Invalid selection. Exiting.[/red]")
+                    sys.exit(1)
+
+            # Enumerate each selected host
+            for host_ip in hosts_to_scan:
+                console.print(f"\n[bold magenta]{'═' * 60}[/bold magenta]")
+                console.print(f"[bold magenta]  Enumerating Host: {host_ip}[/bold magenta]")
+                console.print(f"[bold magenta]{'═' * 60}[/bold magenta]\n")
+
+                # Update target to current host
+                original_target = config.target_ip
+                config.target_ip = host_ip
+
+                # Create subdirectory for this host
+                host_dir = os.path.join(config.output_dir, host_ip.replace('.', '_'))
+                os.makedirs(host_dir, exist_ok=True)
+                original_output_dir = config.output_dir
+                config.output_dir = host_dir
+
+                # Reset discovered data for this host
+                config.discovered_ports = {}
+                config.discovered_hosts = []
+
+                # Run enumeration for this host
+                open_ports = run_phase(nmap_basic_scan, f"Port Discovery: {host_ip}")
+
+                if open_ports:
+                    run_phase(nmap_detailed_scan, f"Service Detection: {host_ip}", open_ports)
+
+                    if config.discovered_hosts:
+                        run_phase(update_hosts_file, f"Hostname Integration: {host_ip}")
+
+                    run_phase(analyze_ssl_certificates, f"SSL Analysis: {host_ip}")
+
+                    if '80' in config.discovered_ports or '443' in config.discovered_ports:
+                        for port in ['80', '443', '8080', '8443']:
+                            if port in config.discovered_ports:
+                                run_phase(enumerate_web_directories, f"Web Enum: {host_ip}:{port}", port)
+
+                    run_phase(enumerate_smb, f"SMB Enumeration: {host_ip}")
+                    run_phase(enumerate_additional_services, f"Additional Services: {host_ip}")
+                else:
+                    console.print(f"[yellow]No open ports on {host_ip}, skipping...[/yellow]")
+
+                # Restore output directory for next host
+                config.output_dir = original_output_dir
+
+            # Restore original target and generate final report
+            config.target_ip = original_target
+            generate_report()
+            console.print(f"\n[green]✓ Enumeration complete! Results saved to: {config.output_dir}[/green]")
+            sys.exit(0)
+
+        # Single IP - proceed with normal flow
         # Phase 1: Initial port discovery
         open_ports = run_phase(nmap_basic_scan, "Phase 1: Initial Port Discovery")
-        
+
         if not open_ports:
             console.print("[red]No open ports found. Exiting.[/red]")
             sys.exit(0)
