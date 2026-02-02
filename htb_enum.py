@@ -1545,14 +1545,17 @@ def enumerate_additional_services():
         # FTP
         if service == 'ftp':
             console.print(f"\n[cyan]Enumerating FTP (port {port})...[/cyan]")
-            
-            # Anonymous login
-            cmd = f"ftp -n {config.target_ip} {port} <<EOF\nuser anonymous anonymous\nls\nbye\nEOF"
-            stdout, stderr, code = run_command(cmd, "FTP anonymous login")
-            
-            if "230" in stdout or "Login successful" in stdout:
+
+            # Use nmap scripts for FTP enumeration (more reliable than heredoc)
+            cmd = f"nmap -p {port} --script ftp-anon,ftp-syst,ftp-vsftpd-backdoor {config.target_ip}"
+            stdout, stderr, code = run_command(cmd, "FTP enumeration")
+
+            if "Anonymous FTP login allowed" in stdout:
                 console.print("[green]✓ Anonymous FTP login allowed[/green]")
-                save_output(f"ftp_port{port}.txt", stdout)
+            if "vsftpd" in stdout and "backdoor" in stdout.lower():
+                console.print("[red]⚠ Potential vsftpd backdoor detected![/red]")
+
+            save_output(f"ftp_port{port}.txt", stdout)
         
         # SSH
         elif service == 'ssh':
