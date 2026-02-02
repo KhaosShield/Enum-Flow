@@ -432,7 +432,7 @@ def nmap_detailed_scan(ports):
     
     port_list = ",".join(ports)
     
-    cmd = f"nmap -p{port_list} -sV -sC -A -Pn -T4 -oN {config.output_dir}/nmap_detailed.txt {config.target_ip}"
+    cmd = f"nmap -p {port_list} -sV -sC -A -Pn -T4 -oN {config.output_dir}/nmap_detailed.txt {config.target_ip}"
     console.print(f"\n[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
     console.print("[dim]Running detailed service scan. [bold yellow]Press Ctrl+Z to skip this phase.[/bold yellow][/dim]\n")
     
