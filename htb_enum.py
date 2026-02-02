@@ -283,34 +283,59 @@ def add_to_report(section, content, commands=None, found_items=None):
     
     config.markdown_report.append(content)
 
+def validate_target(target):
+    """Validate target IP, CIDR notation, or range"""
+    target = target.strip()
+
+    # Single IP: 10.10.110.1
+    if re.match(r'^(\d{1,3}\.){3}\d{1,3}$', target):
+        octets = target.split('.')
+        if all(0 <= int(octet) <= 255 for octet in octets):
+            return True
+
+    # CIDR notation: 10.10.110.0/24
+    if re.match(r'^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$', target):
+        ip_part, cidr = target.rsplit('/', 1)
+        octets = ip_part.split('.')
+        if all(0 <= int(octet) <= 255 for octet in octets) and 0 <= int(cidr) <= 32:
+            return True
+
+    # Range notation: 10.10.110.1-254
+    if re.match(r'^(\d{1,3}\.){3}\d{1,3}-\d{1,3}$', target):
+        ip_part, end = target.rsplit('-', 1)
+        octets = ip_part.split('.')
+        if all(0 <= int(octet) <= 255 for octet in octets) and 0 <= int(end) <= 255:
+            return True
+
+    return False
+
 def get_target_ip():
-    """Prompt user for target IP address"""
+    """Prompt user for target IP address, CIDR, or range"""
     console.print("\n[bold cyan]═══ Target Configuration ═══[/bold cyan]\n")
-    
+    console.print("[dim]Supported formats: 10.10.110.1 | 10.10.110.0/24 | 10.10.110.1-254[/dim]\n")
+
     while True:
-        ip = console.input("[bold yellow]Enter target IP address:[/bold yellow] ").strip()
-        
-        # Basic IP validation
-        if re.match(r'^(\d{1,3}\.){3}\d{1,3}$', ip):
-            octets = ip.split('.')
-            if all(0 <= int(octet) <= 255 for octet in octets):
-                config.target_ip = ip
-                console.print(f"[green]✓[/green] Target set: {ip}\n")
-                return ip
-        
-        console.print("[red]Invalid IP address format. Please try again.[/red]")
+        ip = console.input("[bold yellow]Enter target:[/bold yellow] ").strip()
+
+        if validate_target(ip):
+            config.target_ip = ip
+            console.print(f"[green]✓[/green] Target set: {ip}\n")
+            return ip
+
+        console.print("[red]Invalid target format. Please try again.[/red]")
 
 def create_output_directory():
     """Create output directory for scan results"""
-    dirname = config.target_ip
+    # Sanitize target for directory name (replace / with _ for CIDR notation)
+    dirname = config.target_ip.replace('/', '_')
     config.output_dir = os.path.join(os.getcwd(), dirname)
-    
+
     # Check if directory exists and handle accordingly
     if os.path.exists(config.output_dir):
         response = console.input(f"[yellow]Directory {dirname} already exists. Overwrite? (y/n):[/yellow] ").strip().lower()
         if response != 'y':
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            dirname = f"{config.target_ip}_{timestamp}"
+            dirname = f"{dirname}_{timestamp}"
             config.output_dir = os.path.join(os.getcwd(), dirname)
             console.print(f"[yellow]Using timestamped directory instead[/yellow]")
     
@@ -2048,7 +2073,7 @@ def main():
         description="HTB Enumeration Tool v1.0",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument('-t', '--target', help='Target IP address')
+    parser.add_argument('-t', '--target', help='Target IP, CIDR (10.10.110.0/24), or range (10.10.110.1-254)')
     parser.add_argument('-s', '--stealth', action='store_true', help='Use stealth mode (slower, quieter)')
     parser.add_argument('--threads', type=int, default=50, help='Number of threads (default: 50)')
     parser.add_argument('--quick', action='store_true', help='Quick scan (skip deep enumeration)')
@@ -2063,8 +2088,8 @@ def main():
     
     # Configuration
     if args.target:
-        if not re.match(r'^(\d{1,3}\.){3}\d{1,3}$', args.target):
-            console.print("[red]Invalid IP address format[/red]")
+        if not validate_target(args.target):
+            console.print("[red]Invalid target format. Use: IP, CIDR (10.10.110.0/24), or range (10.10.110.1-254)[/red]")
             sys.exit(1)
         config.target_ip = args.target
     else:
