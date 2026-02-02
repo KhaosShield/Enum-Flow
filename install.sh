@@ -13,7 +13,7 @@ NC='\033[0m' # No Color
 echo -e "${BLUE}"
 cat << "EOF"
 ╔═══════════════════════════════════════════════════════════╗
-║     HTB Enumeration Tool v1.0 - Installer              ║
+║     HTB Enumeration Tool v1.0rc2 - Installer              ║
 ╚═══════════════════════════════════════════════════════════╝
 EOF
 echo -e "${NC}"

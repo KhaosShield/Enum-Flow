@@ -1,14 +1,16 @@
-# HTB Enumeration Tool v1.0rc1
+# HTB Enumeration Tool v1.0rc2
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-1.0rc1-blue.svg)
+![Version](https://img.shields.io/badge/version-1.0rc2-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.8+-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-orange.svg)
-![Platform](https://img.shields.io/badge/platform-linux-lightgrey.svg)
+![Platform](https://img.shields.io/badge/platform-Kali%20Linux-lightgrey.svg)
 ![Maintained](https://img.shields.io/badge/maintained-yes-brightgreen.svg)
 
-**Comprehensive automated enumeration tool for HackTheBox labs and CTF challenges**
+**Comprehensive automated enumeration tool for HackTheBox labs, Pro Labs, and CTF challenges**
+
+*Author: [@KhaosShield](https://github.com/KhaosShield)*
 
 </div>
 
@@ -16,17 +18,28 @@
 
 ## Overview
 
-A Python-based enumeration tool that automates reconnaissance for HackTheBox labs and CTF challenges. It conducts systematic enumeration across multiple attack vectors, generates detailed reports, and integrates popular security tools into a single workflow.
+A Python-based enumeration tool that automates reconnaissance for HackTheBox labs, Pro Labs, and CTF challenges. It conducts systematic enumeration across multiple attack vectors, generates detailed reports, and integrates popular security tools into a single workflow.
+
+## What's New in v1.0rc2
+
+- **Network Range Support** - CIDR notation (10.10.110.0/24) and range notation (10.10.110.1-254)
+- **Host Discovery** - Automatic ping sweep to find live hosts in network ranges
+- **Per-Host Enumeration** - Organized output with subdirectories for each discovered host
+- **BloodHound Integration** - AD enumeration with bloodhound-python
+- **Kerbrute Support** - Kerberos user enumeration
+- **Improved FTP Enumeration** - Using nmap scripts for reliability
+- **Additional AD Tools** - Kerberoasting, AS-REP roasting, credential testing
 
 ## Features
 
 ### Core Capabilities
 
+- **Network range scanning** with automatic host discovery
 - Automated port discovery and service enumeration with nmap
-- Hostname detection with automatic /etc/hosts integration  
+- Hostname detection with automatic /etc/hosts integration
 - Web directory brute-forcing with configurable recursion depth
 - Virtual host and subdomain discovery
-- Active Directory enumeration with NetExec integration
+- Active Directory enumeration with NetExec and BloodHound integration
 - Multi-service protocol enumeration (SMB, LDAP, DNS, FTP, SSH, etc.)
 - SSL/TLS certificate analysis and vulnerability testing
 - Comprehensive markdown report generation
@@ -39,10 +52,11 @@ A Python-based enumeration tool that automates reconnaissance for HackTheBox lab
 - Nuclei vulnerability scanning integration
 - NFS share enumeration
 - SNMP community string discovery
-- NetBIOS and RPC enumeration  
-- Impacket-based Kerberos attacks
+- NetBIOS and RPC enumeration
+- Impacket-based Kerberos attacks (AS-REP roasting, Kerberoasting)
+- BloodHound data collection for AD environments
 
---- 
+---
 
 ## Requirements
 
@@ -56,36 +70,43 @@ A Python-based enumeration tool that automates reconnaissance for HackTheBox lab
 
 Enhance functionality with these optional tools:
 
-- feroxbuster, ffuf - Advanced web fuzzing
-- smbclient, smbmap - SMB enumeration
-- ldapsearch - LDAP queries
-- dig, dnsenum - DNS enumeration
-- whatweb - Technology detection
-- enum4linux - Legacy SMB/LDAP enumeration
-- nikto, wpscan - Web vulnerability scanning
-- testssl.sh, sslscan - SSL/TLS testing
-- nbtscan, onesixtyone - NetBIOS/SNMP scanning
-- impacket-scripts - Python network protocols
+| Category | Tools |
+|----------|-------|
+| Web Fuzzing | feroxbuster, ffuf |
+| SMB/AD | smbclient, smbmap, enum4linux-ng, bloodhound-python |
+| LDAP/Kerberos | ldapsearch, kerbrute, impacket-scripts |
+| DNS | dig, dnsenum |
+| Web Scanning | whatweb, nikto, wpscan, joomscan, sqlmap |
+| SSL/TLS | testssl.sh, sslscan |
+| Network | nbtscan, onesixtyone, responder, ssh-audit |
 
 ### Python Requirements
 
 - Python 3.8 or higher
 - rich library (auto-installed if missing)
+- bloodhound library (installed via install.sh)
 
 ## Installation
 
-### Quick Install
+### Quick Install (Kali Linux)
 
 ```bash
 # Clone the repository
-git clone https://github.com/khaosshield/htb-enum.git
+git clone https://github.com/KhaosShield/htb-enum.git
 cd htb-enum
 
 # Run the installer
 chmod +x install.sh
 sudo ./install.sh
 ```
---- 
+
+The installer will:
+- Install all required and optional tools
+- Install Python dependencies (rich, bloodhound)
+- Download kerbrute from GitHub
+- Optionally create a global symlink
+
+---
 
 ## Usage
 
@@ -98,155 +119,157 @@ sudo ./install.sh
 # Specify target IP
 ./htb_enum.py -t 10.10.11.123
 
+# Network range (Pro Labs)
+./htb_enum.py -t 10.10.110.0/24
+
+# IP range notation
+./htb_enum.py -t 10.10.110.1-254
+
 # Quick scan (skips deep enumeration)
 ./htb_enum.py -t 10.10.11.123 --quick
 
 # Stealth mode (slower, quieter)
 ./htb_enum.py -t 10.10.11.123 --stealth
-
-# Custom thread count
-./htb_enum.py -t 10.10.11.123 --threads 100
 ```
 
 ### Command-Line Options
 
 ```
--t, --target IP       Target IP address
--s, --stealth         Use stealth mode
+-t, --target TARGET   Target IP, CIDR (10.10.110.0/24), or range (10.10.110.1-254)
+-s, --stealth         Use stealth mode (slower, quieter scans)
 --threads N           Number of threads (default: 50)
 --quick               Quick scan (skip deep enumeration)
 -h, --help            Show help message
 ```
 
+### Controls During Execution
+
+| Key | Action |
+|-----|--------|
+| Ctrl+C | Exit entire script |
+| Ctrl+Z | Skip current phase (then type `fg` + Enter to continue) |
+
 ## Enumeration Phases
 
-The tool conducts enumeration in organized phases:
+### Single Host Mode
 
-**Phase 1: Initial Port Discovery**  
+**Phase 1: Initial Port Discovery**
 Fast SYN scan across all ports to identify open services.
 
-**Phase 2: Service & Version Detection**  
+**Phase 2: Service & Version Detection**
 Detailed nmap scan with version detection and NSE scripts.
 
-**Phase 3: Web Directory Enumeration**  
-Recursive directory brute-forcing and common file discovery.
+**Phase 3: Hostname Integration**
+Automatic /etc/hosts update with discovered hostnames.
 
-**Phase 4: Virtual Host Discovery**  
-VHOST enumeration and subdomain discovery.
+**Phase 4: SSL Certificate Analysis**
+Extract information from SSL/TLS certificates.
 
-**Phase 5: DNS Enumeration**  
+**Phase 5: Web Enumeration**
+Directory brute-forcing, VHOST discovery, technology detection.
+
+**Phase 6: DNS Enumeration**
 Zone transfer attempts and DNS record enumeration.
 
-**Phase 6: SMB Enumeration**  
-Share enumeration, null sessions, and user discovery.
+**Phase 7: Active Directory Enumeration**
+NetExec, BloodHound, AS-REP roasting, Kerberoasting.
 
-**Phase 7: Active Directory Enumeration**  
-NetExec scanning, AS-REP roasting, Kerberos enumeration, LDAP queries.
+**Phase 8: SMB Enumeration**
+Share enumeration, null sessions, user discovery.
 
-**Phase 8: Additional Services**  
-FTP, SSH, MySQL, MSSQL, RDP, and SNMP enumeration.
+**Phase 9: Additional Services**
+FTP, SSH, MySQL, MSSQL, RDP, SNMP enumeration.
 
-**Phase 9: Web Vulnerability Assessment**  
-Nikto scanning, CMS detection, SSL/TLS testing, Nuclei scanning.
+**Phase 10: Advanced Web Assessment**
+Nikto, CMS detection, SSL testing, Nuclei scanning.
 
-**Phase 10: Protocol-Specific Deep Enumeration**  
-NFS, SNMP, NetBIOS, RPC, and Impacket-based enumeration.
+### Network Range Mode
+
+**Phase 0: Host Discovery**
+Ping sweep to identify live hosts in the network range.
+
+**Host Selection**
+Interactive selection of which host(s) to enumerate.
+
+**Per-Host Enumeration**
+Full enumeration pipeline runs for each selected host.
 
 ## Output
 
-### Terminal Output
-
-Color-coded terminal output with progress indicators:
-- Green: Success/Found
-- Yellow: Warnings/Optional  
-- Cyan: Information/Progress
-- Red: Errors/Failed
-
 ### Directory Structure
 
-Results are saved in a directory named after the target IP:
-
+**Single Host:**
 ```
 <IP_ADDRESS>/
 ├── enumeration_report.md       # Comprehensive report
 ├── nmap_initial.txt            # Initial port scan
 ├── nmap_detailed.txt           # Detailed service scan
 ├── gobuster_port80.txt         # Web directory results
-├── vhosts_ffuf.txt             # VHOST enumeration
 ├── netexec_*.txt               # NetExec outputs
-├── dns_zone_transfer.txt       # DNS results
-├── ssl_cert_*.txt              # SSL certificate info
 └── [service]_port[N].txt       # Service-specific results
 ```
 
-If the directory already exists, you'll be prompted to overwrite or create a timestamped directory.
+**Network Range:**
+```
+10.10.110.0_24/
+├── host_discovery.txt          # Live host scan results
+├── enumeration_report.md       # Combined report
+├── 10_10_110_2/               # Per-host subdirectory
+│   ├── nmap_initial.txt
+│   ├── nmap_detailed.txt
+│   └── ...
+├── 10_10_110_5/
+│   └── ...
+└── 10_10_110_100/
+    └── ...
+```
 
-### Markdown Report
+### Terminal Output
 
-A comprehensive markdown report is automatically generated with:
-- Scan summary and statistics
-- Discovered ports and services  
-- Hostname discoveries
-- Service-specific enumeration results
-- Recommended next steps
+Color-coded terminal output with progress indicators:
+- **Green**: Success/Found
+- **Yellow**: Warnings/Optional
+- **Cyan**: Information/Progress
+- **Red**: Errors/Failed
 
-## Documentation
+---
 
-- **README.md** - Main documentation (you are here)
-- **EXAMPLES.md** - Detailed usage examples and scenarios
-- **QUICKREF.md** - Quick reference card for common commands
-- **ADVANCED_ENUMERATION.md** - Deep dive into enumeration capabilities
-- **CONTRIBUTING.md** - Contribution guidelines
-- **CHANGELOG.md** - Version history and planned features
-- **SECURITY.md** - Security policy and responsible disclosure
+## Pro Labs Usage
 
-## Performance
+For HackTheBox Pro Labs like Dante, Offshore, or RastaLabs:
 
-**Quick Scan (--quick)**  
-Approximately 5-10 minutes. Covers core enumeration phases.
+```bash
+# Discover all live hosts first
+./htb_enum.py -t 10.10.110.0/24
 
-**Full Scan (default)**  
-Approximately 30-60 minutes depending on target. Includes all phases and deep enumeration.
+# Select 'all' to enumerate every host, or pick specific ones
+# Results organized in per-host subdirectories
+```
 
-**Stealth Mode (--stealth)**  
-Significantly slower. Reduces scan noise and avoids IDS/IPS detection.
+**Tips for Pro Labs:**
+- Start with host discovery to map the network
+- Enumerate one host at a time for large networks
+- Look for credential reuse across hosts
+- Check BloodHound output for AD attack paths
 
-## Configuration
-
-Default configuration uses:
-- Thread count: 50 (adjustable with --threads)
-- Scan depth: 2 levels (configurable during runtime)
-- Wordlists: SecLists default wordlists
-
---- 
-
-## Tips
-
-- Always start with the automated scan to establish baseline reconnaissance
-- Review the complete markdown report before manual testing
-- Use stealth mode when testing against IDS/IPS systems
-- Reduce thread count if experiencing rate limiting
-- Collected credentials should be tested across all discovered services
-- Check for version-specific CVEs in discovered services
-
---- 
+---
 
 ## Troubleshooting
 
-**No ports found**  
+**No ports found**
 Verify target is reachable with ping. Check firewall rules.
 
-**Tool not found errors**  
-Install missing tools from the requirements section.
+**Tool not found errors**
+Run `sudo ./install.sh` to install missing tools.
 
-**Permission denied updating /etc/hosts**  
-Ensure you have sudo privileges.
+**Permission denied updating /etc/hosts**
+Run with sudo: `sudo ./htb_enum.py`
 
-**Timeout errors**  
-Reduce thread count with `--threads 10`.
+**Timeout errors on large networks**
+Use single host mode or reduce scope.
 
-**NetExec not working**  
-Verify installation: `netexec --version` or `nxc --version`
+**NetExec not working**
+Verify installation: `netexec --version`
 
 ## License
 
@@ -256,12 +279,14 @@ MIT License - See [LICENSE](LICENSE) file for details.
 
 This tool integrates and automates popular security tools:
 - Nmap by Gordon Lyon
-- Gobuster by OJ Reeves  
+- Gobuster by OJ Reeves
 - NetExec by Pennyw0rth
+- BloodHound by SpecterOps
 - SecLists by Daniel Miessler
 - Rich library by Will McGugan
 
 ---
 
-**Version**: v1.0rc1  
-**Last Updated**: January 26, 2025
+**Version**: v1.0rc2
+**Author**: [@KhaosShield](https://github.com/KhaosShield)
+**Last Updated**: February 2, 2026

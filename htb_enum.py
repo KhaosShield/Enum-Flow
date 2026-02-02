@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-HTB Enumeration Tool v1.0
+HTB Enumeration Tool v1.0rc2
 Author: @KhaosShield
-Description: Comprehensive enumeration tool for HackTheBox labs
+Description: Comprehensive enumeration tool for HackTheBox labs and Pro Labs
 """
 
 import subprocess
