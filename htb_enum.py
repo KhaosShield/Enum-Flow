@@ -11,13 +11,9 @@ import re
 import argparse
 import os
 from datetime import datetime
-import select
 import signal
-import signal
-import threading
-import termios
-import tty
-import select
+import shutil
+import glob
 
 try:
     from rich.console import Console
@@ -215,7 +211,7 @@ def run_command(cmd, description="", timeout=None, show_command=True):
                 process.terminate()
                 try:
                     process.wait(timeout=5)
-                except:
+                except Exception:
                     process.kill()
                 config.phase_skipped = True
                 return "", "Skipped by user", -2
@@ -225,7 +221,7 @@ def run_command(cmd, description="", timeout=None, show_command=True):
                 process.terminate()
                 try:
                     process.wait(timeout=5)
-                except:
+                except Exception:
                     process.kill()
                 console.print(f"[red]✗ Command timed out: {description}[/red]")
                 return "", "Timeout", -1
@@ -264,9 +260,6 @@ def save_output(filename, content, command=None):
     
     with open(filepath, 'w') as f:
         f.write(output_content)
-    return filepath
-    with open(filepath, 'w') as f:
-        f.write(content)
     return filepath
 
 def add_to_report(section, content, commands=None, found_items=None):
@@ -686,7 +679,7 @@ def check_common_files(base_url):
             if status == '200':
                 found_files.append((file, status))
                 console.print(f"[green]✓[/green] Found: {file} (Status: {status})")
-        except:
+        except Exception:
             pass
     
     if found_files:
@@ -1048,7 +1041,6 @@ def enumerate_active_directory():
             
             if os.path.exists("asrep_hashes.txt"):
                 console.print("[green]✓ AS-REP roastable accounts found![/green]")
-                import shutil
                 shutil.move("asrep_hashes.txt", f"{config.output_dir}/asrep_hashes.txt")
         else:
             # Try AS-REP roasting without credentials
@@ -1113,8 +1105,6 @@ def enumerate_ad_bloodhound():
         progress.update(task, completed=100)
     
     # Move files to output directory
-    import glob
-    import shutil
     json_files = glob.glob("*.json")
     zip_files = glob.glob("*bloodhound*.zip")
     
@@ -1124,7 +1114,7 @@ def enumerate_ad_bloodhound():
             dest = os.path.join(config.output_dir, f)
             shutil.move(f, dest)
             moved_files.append(f)
-        except:
+        except Exception:
             pass
     
     if moved_files:
@@ -1164,7 +1154,6 @@ def enumerate_ad_kerberoasting():
         stdout, stderr, code = run_command(cmd, "NetExec Kerberoasting", timeout=300)
         
         if os.path.exists("kerberoast_hashes.txt"):
-            import shutil
             dest = os.path.join(config.output_dir, "kerberoast_hashes.txt")
             shutil.move("kerberoast_hashes.txt", dest)
             
