@@ -1026,7 +1026,8 @@ def enumerate_smb():
     # Enum4linux
     if tool_exists('enum4linux'):
         console.print("[dim]Running enum4linux. [bold yellow]Press Ctrl+Z to skip.[/bold yellow][/dim]\n")
-        cmd = f"enum4linux -a {config.target_ip}"
+        output_file = f"{config.output_dir}/enum4linux.txt"
+        cmd = f"enum4linux -a {config.target_ip} > '{output_file}' 2>&1"
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -1035,13 +1036,14 @@ def enumerate_smb():
             console=console
         ) as progress:
             task = progress.add_task("[cyan]Running enum4linux...", total=100)
-            stdout, stderr, code = run_command(cmd, "enum4linux enumeration", timeout=300, show_command=False)
+            run_command(cmd, "enum4linux enumeration", timeout=300, show_command=False)
             progress.update(task, completed=100)
 
-        if stdout:
-            save_output("enum4linux.txt", stdout, command=cmd)
+        # Read output file and display key findings
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+            with open(output_file, 'r') as f:
+                stdout = f.read()
 
-            # Display key findings with colors
             console.print("\n[bold cyan]enum4linux Results:[/bold cyan]")
 
             # OS information
@@ -1062,7 +1064,6 @@ def enumerate_smb():
                     console.print(f"    - {user}")
 
             # Shares found
-            share_lines = re.findall(r'\[\+\]\s*Enumerating.*shares', stdout, re.IGNORECASE)
             shares_found = re.findall(r'^\s+([\w\$]+)\s+Disk', stdout, re.MULTILINE)
             if shares_found:
                 console.print(f"\n  [bold green]Shares found ({len(shares_found)}):[/bold green]")
@@ -1090,7 +1091,7 @@ def enumerate_smb():
                 if len(groups) > 10:
                     console.print(f"    [dim]... and {len(groups) - 10} more (see full output)[/dim]")
 
-            console.print(f"\n  [dim]Full output saved to: {config.output_dir}/enum4linux.txt[/dim]")
+            console.print(f"\n  [dim]Full output saved to: {output_file}[/dim]")
 
             # Add to report
             enum4linux_report = ""
@@ -1104,7 +1105,7 @@ def enumerate_smb():
                 group_list = '\n'.join(f'- {g}' for g in groups)
                 enum4linux_report += f"**Groups ({len(groups)}):**\n{group_list}\n\n"
             if enum4linux_report:
-                add_to_report("enum4linux Enumeration", enum4linux_report, commands=cmd)
+                add_to_report("enum4linux Enumeration", enum4linux_report, commands=f"enum4linux -a {config.target_ip}")
         else:
             console.print("[yellow]enum4linux returned no output[/yellow]")
 
