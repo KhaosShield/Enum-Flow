@@ -166,6 +166,18 @@ def check_prerequisites():
     
     console.print("[green]✓ All required prerequisites met![/green]\n")
 
+def shell_quote(s):
+    """Escape a string for safe use inside single quotes in shell commands"""
+    if not s:
+        return s
+    return s.replace("'", "'\\''")
+
+def escape_braces(s):
+    """Escape curly braces in a string for safe embedding in f-strings"""
+    if not s:
+        return s
+    return s.replace('{', '{{').replace('}', '}}')
+
 def tool_exists(tool):
     """Check if a tool exists in PATH"""
     return subprocess.run(['which', tool], capture_output=True).returncode == 0
@@ -359,13 +371,14 @@ def discover_live_hosts():
         console.print(table)
         console.print(f"\n[green]✓[/green] Found [bold]{len(live_hosts)}[/bold] live host(s)\n")
 
+        host_table = '\n'.join(f'| {i+1} | {h} |' for i, h in enumerate(live_hosts))
         add_to_report("Phase 0: Host Discovery", f"""
 **Network Range:** {config.target_ip}
 **Live Hosts Found:** {len(live_hosts)}
 
 | # | IP Address |
 |---|------------|
-{chr(10).join(f'| {i+1} | {h} |' for i, h in enumerate(live_hosts))}
+{host_table}
 
 """, commands=cmd, found_items=len(live_hosts))
 
@@ -498,7 +511,7 @@ def nmap_basic_scan():
 
 **Full Nmap Output:**
 ```
-{stdout[:2000]}...
+{escape_braces(stdout[:2000])}...
 ```
 """, commands=cmd, found_items=len(ports))
     else:
@@ -547,7 +560,7 @@ def nmap_detailed_scan(ports):
 **Service and Version Details:**
 
 ```
-{stdout[:3000]}...
+{escape_braces(stdout[:3000])}...
 ```
 """)
 
@@ -632,9 +645,10 @@ def update_hosts_file():
             
             if result.returncode == 0:
                 console.print("[green]✓ Successfully updated /etc/hosts[/green]")
+                host_list = '\n'.join(f'- {host}' for host in config.discovered_hosts)
                 add_to_report("Hostname Discovery", f"""
 **Discovered Hostnames:**
-{chr(10).join(f'- {host}' for host in config.discovered_hosts)}
+{host_list}
 
 **Added to /etc/hosts:**
 ```
@@ -737,7 +751,7 @@ def enumerate_web_directories(port='80'):
 
 **Sample Results:**
 ```
-{results[:2000]}...
+{escape_braces(results[:2000])}...
 ```
 
 **Full results:** `{output_file}`
@@ -773,13 +787,16 @@ def check_common_files(base_url):
             if status == '200':
                 found_files.append((file, status))
                 console.print(f"[green]✓[/green] Found: {file} (Status: {status})")
-        except Exception:
+        except subprocess.TimeoutExpired:
             pass
+        except Exception as e:
+            console.print(f"[dim]Warning checking {file}: {e}[/dim]")
     
     if found_files:
+        file_list = '\n'.join(f'- `{file}` (Status: {status})' for file, status in found_files)
         add_to_report("Common Files Discovery", f"""
 **Found Files:**
-{chr(10).join(f'- `{file}` (Status: {status})' for file, status in found_files)}
+{file_list}
 """)
 
 def enumerate_vhosts(port='80'):
@@ -840,9 +857,10 @@ def enumerate_vhosts_ffuf(base_domain, port, wordlist):
                         console.print(f"[green]✓[/green] Found VHOST: {vhost}")
                 
                 if found_vhosts:
+                    vhost_list = '\n'.join(f'- {vhost}' for vhost in found_vhosts)
                     add_to_report("Virtual Host Discovery", f"""
 **Discovered VHOSTs:**
-{chr(10).join(f'- {vhost}' for vhost in found_vhosts)}
+{vhost_list}
 
 **Note:** Add these to /etc/hosts pointing to {config.target_ip}
 """)
@@ -853,19 +871,51 @@ def enumerate_vhosts_gobuster(base_domain, port, wordlist):
     """VHOST enumeration using gobuster"""
     protocol = 'https' if port == '443' else 'http'
     base_url = f"{protocol}://{config.target_ip}:{port}" if port not in ['80', '443'] else f"{protocol}://{config.target_ip}"
-    
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         console=console
     ) as progress:
-        task = progress.add_task("[cyan]Enumerating VHOSTs with gobuster...", total=None)
-        
+        task = progress.add_task("[cyan]Enumerating VHOSTs with gobuster...", total=100)
+
         output_file = f"{config.output_dir}/vhosts_gobuster.txt"
         cmd = f"gobuster vhost -u {base_url} -w {wordlist} --domain {base_domain} -t {config.threads} -o {output_file} -q"
-        
-        stdout, stderr, code = run_command(cmd, "VHOST enumeration", timeout=600)
+
+        stdout, stderr, code = run_command(cmd, "VHOST enumeration", timeout=600, show_command=False)
         progress.update(task, completed=100)
+
+    # Parse results
+    if os.path.exists(output_file):
+        try:
+            with open(output_file, 'r') as f:
+                lines = f.readlines()
+
+            if lines:
+                found_vhosts = []
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # Gobuster vhost output format: "Found: sub.domain.com Status: 200 [Size: 1234]"
+                    match = re.match(r'Found:\s+(\S+)', line)
+                    if match:
+                        vhost = match.group(1)
+                        found_vhosts.append(vhost)
+                        console.print(f"[green]✓[/green] Found VHOST: {vhost}")
+
+                if found_vhosts:
+                    vhost_list = '\n'.join(f'- {vhost}' for vhost in found_vhosts)
+                    add_to_report("Virtual Host Discovery", f"""
+**Discovered VHOSTs (gobuster):**
+{vhost_list}
+
+**Note:** Add these to /etc/hosts pointing to {config.target_ip}
+""")
+        except Exception as e:
+            console.print(f"[yellow]Could not parse VHOST results: {e}[/yellow]")
 
 def enumerate_dns():
     """Enumerate DNS if port 53 is open"""
@@ -895,7 +945,7 @@ def enumerate_dns():
 **Success! Zone transfer allowed for {domain}**
 
 ```
-{stdout[:2000]}...
+{escape_braces(stdout[:2000])}...
 ```
 """)
     else:
@@ -1013,10 +1063,10 @@ def enumerate_active_directory():
     domain = None
     
     if has_creds == 'y':
-        domain = console.input("[bold yellow]Domain (or press Enter for default):[/bold yellow] ").strip()
-        username = console.input("[bold yellow]Username:[/bold yellow] ").strip()
-        password = console.input("[bold yellow]Password:[/bold yellow] ").strip()
-        
+        domain = shell_quote(console.input("[bold yellow]Domain (or press Enter for default):[/bold yellow] ").strip())
+        username = shell_quote(console.input("[bold yellow]Username:[/bold yellow] ").strip())
+        password = shell_quote(console.input("[bold yellow]Password:[/bold yellow] ").strip())
+
         if domain:
             config.credentials = f"{domain}/{username}:{password}"
         else:
@@ -1063,6 +1113,7 @@ def enumerate_active_directory():
                 progress.update(task, completed=100)
 
             creds_valid = "Pwn3d!" in stdout or "[+]" in stdout
+            ldap_only = False
 
             # LDAP fallback if SMB auth failed (useful for service accounts like svc-alfresco)
             if not creds_valid and ('389' in config.discovered_ports or '636' in config.discovered_ports):
@@ -1082,28 +1133,33 @@ def enumerate_active_directory():
                     progress.update(task, completed=100)
                 if "[+]" in stdout_ldap:
                     creds_valid = True
-                    auth_cmd = ldap_auth_cmd
+                    ldap_only = True
                     console.print("[green]✓ Credentials valid via LDAP![/green]")
 
             if creds_valid:
-                console.print("[green]✓ Credentials valid![/green]")
+                if not ldap_only:
+                    console.print("[green]✓ Credentials valid![/green]")
 
-                # Enumerate shares
-                cmd = f"{auth_cmd} --shares"
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    BarColumn(),
-                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                    console=console
-                ) as progress:
-                    task = progress.add_task("[cyan]Enumerating SMB shares...", total=100)
-                    stdout, stderr, code = run_command(cmd, "Enumerating SMB shares", show_command=False)
-                    progress.update(task, completed=100)
-                save_output("netexec_shares.txt", stdout)
+                # Build protocol-appropriate base command
+                enum_cmd = auth_cmd if not ldap_only else ldap_auth_cmd
+
+                # Enumerate shares (SMB only - not supported via LDAP)
+                if not ldap_only:
+                    cmd = f"{enum_cmd} --shares"
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[progress.description]{task.description}"),
+                        BarColumn(),
+                        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                        console=console
+                    ) as progress:
+                        task = progress.add_task("[cyan]Enumerating SMB shares...", total=100)
+                        stdout, stderr, code = run_command(cmd, "Enumerating SMB shares", show_command=False)
+                        progress.update(task, completed=100)
+                    save_output("netexec_shares.txt", stdout)
 
                 # Enumerate users
-                cmd = f"{auth_cmd} --users"
+                cmd = f"{enum_cmd} --users"
                 with Progress(
                     SpinnerColumn(),
                     TextColumn("[progress.description]{task.description}"),
@@ -1117,7 +1173,7 @@ def enumerate_active_directory():
                 save_output("netexec_users.txt", stdout)
 
                 # Enumerate groups
-                cmd = f"{auth_cmd} --groups"
+                cmd = f"{enum_cmd} --groups"
                 with Progress(
                     SpinnerColumn(),
                     TextColumn("[progress.description]{task.description}"),
@@ -1130,19 +1186,20 @@ def enumerate_active_directory():
                     progress.update(task, completed=100)
                 save_output("netexec_groups.txt", stdout)
 
-                # Password policy
-                cmd = f"{auth_cmd} --pass-pol"
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    BarColumn(),
-                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                    console=console
-                ) as progress:
-                    task = progress.add_task("[cyan]Getting password policy...", total=100)
-                    stdout, stderr, code = run_command(cmd, "Getting password policy", show_command=False)
-                    progress.update(task, completed=100)
-                save_output("netexec_passpol.txt", stdout)
+                # Password policy (SMB only - not supported via LDAP)
+                if not ldap_only:
+                    cmd = f"{enum_cmd} --pass-pol"
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[progress.description]{task.description}"),
+                        BarColumn(),
+                        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                        console=console
+                    ) as progress:
+                        task = progress.add_task("[cyan]Getting password policy...", total=100)
+                        stdout, stderr, code = run_command(cmd, "Getting password policy", show_command=False)
+                        progress.update(task, completed=100)
+                    save_output("netexec_passpol.txt", stdout)
             else:
                 console.print("[red]✗ Credentials invalid[/red]")
         else:
@@ -1250,7 +1307,8 @@ def enumerate_active_directory():
 
         # AS-REP Roasting with NetExec
         if username:
-            cmd = f"netexec ldap {config.target_ip} -u '{username}' -p '{password}' --asreproast asrep_hashes.txt"
+            asrep_file = os.path.join(config.output_dir, "asrep_hashes.txt")
+            cmd = f"netexec ldap {config.target_ip} -u '{username}' -p '{password}' --asreproast '{asrep_file}'"
             if domain:
                 cmd += f" -d '{domain}'"
 
@@ -1265,9 +1323,8 @@ def enumerate_active_directory():
                 stdout, stderr, code = run_command(cmd, "AS-REP roasting", show_command=False)
                 progress.update(task, completed=100)
 
-            if os.path.exists("asrep_hashes.txt"):
+            if os.path.exists(asrep_file):
                 console.print("[green]✓ AS-REP roastable accounts found![/green]")
-                shutil.move("asrep_hashes.txt", f"{config.output_dir}/asrep_hashes.txt")
         else:
             # Try AS-REP roasting without credentials
             enumerate_ad_asreproast_noauth()
@@ -1306,10 +1363,10 @@ def enumerate_ad_bloodhound():
     if run_bh != 'y':
         return
     
-    username = console.input("[yellow]Username:[/yellow] ").strip()
-    password = console.input("[yellow]Password:[/yellow] ").strip()
-    domain = console.input("[yellow]Domain:[/yellow] ").strip()
-    
+    username = shell_quote(console.input("[yellow]Username:[/yellow] ").strip())
+    password = shell_quote(console.input("[yellow]Password:[/yellow] ").strip())
+    domain = shell_quote(console.input("[yellow]Domain:[/yellow] ").strip())
+
     if not all([username, password, domain]):
         console.print("[red]All fields required for BloodHound[/red]")
         return
@@ -1330,8 +1387,8 @@ def enumerate_ad_bloodhound():
         stdout, stderr, code = run_command(cmd, "BloodHound collection", timeout=600, show_command=False)
         progress.update(task, completed=100)
     
-    # Move files to output directory
-    json_files = glob.glob("*.json")
+    # Move BloodHound output files to output directory
+    json_files = glob.glob("*_bloodhound.json") + glob.glob("*_users.json") + glob.glob("*_groups.json") + glob.glob("*_computers.json") + glob.glob("*_domains.json")
     zip_files = glob.glob("*bloodhound*.zip")
     
     moved_files = []
@@ -1340,8 +1397,8 @@ def enumerate_ad_bloodhound():
             dest = os.path.join(config.output_dir, f)
             shutil.move(f, dest)
             moved_files.append(f)
-        except Exception:
-            pass
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not move {f}: {e}[/yellow]")
     
     if moved_files:
         console.print(f"\n[green]✓ BloodHound data collected![/green]")
@@ -1358,14 +1415,14 @@ def enumerate_ad_kerberoasting():
     """Attempt Kerberoasting to find service accounts"""
     console.print("\n[bold cyan]═══ Kerberoasting ═══[/bold cyan]")
     
-    username = console.input("[yellow]Username (or press Enter to skip):[/yellow] ").strip()
+    username = shell_quote(console.input("[yellow]Username (or press Enter to skip):[/yellow] ").strip())
     if not username:
         console.print("[dim]Skipping Kerberoasting (requires credentials)[/dim]")
         return
-    
-    password = console.input("[yellow]Password:[/yellow] ").strip()
-    domain = console.input("[yellow]Domain:[/yellow] ").strip()
-    
+
+    password = shell_quote(console.input("[yellow]Password:[/yellow] ").strip())
+    domain = shell_quote(console.input("[yellow]Domain:[/yellow] ").strip())
+
     if not all([password, domain]):
         console.print("[yellow]Domain and password required, skipping...[/yellow]")
         return
@@ -1376,12 +1433,12 @@ def enumerate_ad_kerberoasting():
     if tool_exists('netexec'):
         console.print("[cyan]Attempting Kerberoasting with NetExec...[/cyan]")
         
-        cmd = f"netexec ldap {config.target_ip} -u '{username}' -p '{password}' -d '{domain}' --kerberoasting kerberoast_hashes.txt"
+        kerb_file = os.path.join(config.output_dir, "kerberoast_hashes.txt")
+        cmd = f"netexec ldap {config.target_ip} -u '{username}' -p '{password}' -d '{domain}' --kerberoasting '{kerb_file}'"
         stdout, stderr, code = run_command(cmd, "NetExec Kerberoasting", timeout=300)
-        
-        if os.path.exists("kerberoast_hashes.txt"):
-            dest = os.path.join(config.output_dir, "kerberoast_hashes.txt")
-            shutil.move("kerberoast_hashes.txt", dest)
+
+        if os.path.exists(kerb_file):
+            dest = kerb_file
             
             with open(dest, 'r') as f:
                 hashes = f.read()
@@ -1548,14 +1605,14 @@ def enumerate_ad_shares_deep():
     """Deep enumeration of SMB shares looking for sensitive files"""
     console.print("\n[bold cyan]═══ Deep Share Enumeration ═══[/bold cyan]")
     
-    username = console.input("[yellow]Username (or press Enter to skip):[/yellow] ").strip()
+    username = shell_quote(console.input("[yellow]Username (or press Enter to skip):[/yellow] ").strip())
     if not username:
         console.print("[dim]Skipping (requires credentials)[/dim]")
         return
-    
-    password = console.input("[yellow]Password:[/yellow] ").strip()
-    domain = console.input("[yellow]Domain (optional):[/yellow] ").strip()
-    
+
+    password = shell_quote(console.input("[yellow]Password:[/yellow] ").strip())
+    domain = shell_quote(console.input("[yellow]Domain (optional):[/yellow] ").strip())
+
     if not tool_exists('netexec'):
         console.print("[yellow]NetExec not found, skipping[/yellow]")
         return
@@ -1590,18 +1647,18 @@ def enumerate_ad_gpp():
     """Check for Group Policy Preferences passwords"""
     console.print("\n[bold cyan]═══ GPP Password Extraction ═══[/bold cyan]")
     
-    username = console.input("[yellow]Username (or press Enter to skip):[/yellow] ").strip()
+    username = shell_quote(console.input("[yellow]Username (or press Enter to skip):[/yellow] ").strip())
     if not username:
         console.print("[dim]Skipping (requires credentials)[/dim]")
         return
-    
-    password = console.input("[yellow]Password:[/yellow] ").strip()
-    domain = console.input("[yellow]Domain:[/yellow] ").strip()
-    
+
+    password = shell_quote(console.input("[yellow]Password:[/yellow] ").strip())
+    domain = shell_quote(console.input("[yellow]Domain:[/yellow] ").strip())
+
     if not tool_exists('netexec'):
         console.print("[yellow]NetExec not found, skipping[/yellow]")
         return
-    
+
     console.print("[cyan]Checking SYSVOL for GPP passwords...[/cyan]")
     
     cmd = f"netexec smb {config.target_ip} -u '{username}' -p '{password}' -d '{domain}' -M gpp_password"
@@ -1732,7 +1789,8 @@ def enumerate_additional_services():
 
 def web_technology_detection():
     """Detect web technologies using whatweb"""
-    if '80' not in config.discovered_ports and '443' not in config.discovered_ports:
+    web_ports = ['80', '443', '8080', '8443']
+    if not any(p in config.discovered_ports for p in web_ports):
         return
     
     if not tool_exists('whatweb'):
@@ -1801,7 +1859,7 @@ def web_technology_detection():
                                         console.print(f"  [cyan]•[/cyan] {tech}")
                     else:
                         # Fallback: just show first line cleaned up
-                        console.print(f"  {stdout.split(chr(10))[0]}")
+                        console.print(f"  {stdout.splitlines()[0]}")
                         
                 except Exception as e:
                     # If parsing fails, show raw output (cleaned)
@@ -1811,7 +1869,8 @@ def web_technology_detection():
 
 def nikto_scan():
     """Run Nikto web vulnerability scanner"""
-    if '80' not in config.discovered_ports and '443' not in config.discovered_ports:
+    web_ports = ['80', '443', '8080', '8443']
+    if not any(p in config.discovered_ports for p in web_ports):
         return
     
     if not tool_exists('nikto'):
@@ -1846,7 +1905,8 @@ def nikto_scan():
 
 def cms_detection():
     """Detect and enumerate CMS (WordPress, Joomla, Drupal)"""
-    if '80' not in config.discovered_ports and '443' not in config.discovered_ports:
+    web_ports = ['80', '443', '8080', '8443']
+    if not any(p in config.discovered_ports for p in web_ports):
         return
     
     console.print("\n[bold cyan]CMS Detection & Enumeration...[/bold cyan]")
@@ -2162,9 +2222,6 @@ def impacket_enumeration():
         domain = config.discovered_hosts[0].split('.')[-2:] if config.discovered_hosts else 'htb.local'
         domain = '.'.join(domain) if isinstance(domain, list) else domain
         
-        # Try with common usernames
-        usernames = ['administrator', 'guest', 'admin', 'user', 'svc-admin']
-        
         output_file = f"{config.output_dir}/asreproast_nousers.txt"
         cmd = f"impacket-GetNPUsers {domain}/ -dc-ip {config.target_ip} -request -format hashcat -outputfile {output_file}"
         
@@ -2383,7 +2440,7 @@ def main():
 
                     run_phase(analyze_ssl_certificates, f"SSL Analysis: {host_ip}")
 
-                    if '80' in config.discovered_ports or '443' in config.discovered_ports:
+                    if any(p in config.discovered_ports for p in ['80', '443', '8080', '8443']):
                         for port in ['80', '443', '8080', '8443']:
                             if port in config.discovered_ports:
                                 run_phase(enumerate_web_directories, f"Web Enum: {host_ip}:{port}", port)
@@ -2421,7 +2478,7 @@ def main():
         run_phase(analyze_ssl_certificates, "Phase 4: SSL Analysis")
         
         # Phase 5: Web enumeration
-        if '80' in config.discovered_ports or '443' in config.discovered_ports:
+        if any(p in config.discovered_ports for p in ['80', '443', '8080', '8443']):
             for port in ['80', '443', '8080', '8443']:
                 if port in config.discovered_ports:
                     run_phase(enumerate_web_directories, f"Phase 5: Web Directory Enumeration (Port {port})", port)
@@ -2443,7 +2500,7 @@ def main():
             run_phase(enumerate_additional_services, "Phase 9: Additional Services")
         
         # Phase 10: Advanced Web Enumeration
-        if '80' in config.discovered_ports or '443' in config.discovered_ports:
+        if any(p in config.discovered_ports for p in ['80', '443', '8080', '8443']):
             if not args.quick:
                 console.print(Panel.fit(
                     "[bold cyan]Phase 10: Advanced Web Enumeration[/bold cyan]",
