@@ -1023,75 +1023,75 @@ def enumerate_smb():
     else:
         console.print("[yellow]Null session not allowed[/yellow]")
     
-    # Enum4linux
+    # Enum4linux - stream output directly to terminal
     if tool_exists('enum4linux'):
-        console.print("[dim]Running enum4linux. [bold yellow]Press Ctrl+Z to skip.[/bold yellow][/dim]\n")
         output_file = f"{config.output_dir}/enum4linux.txt"
-        cmd = f"enum4linux -a {config.target_ip} > '{output_file}' 2>&1"
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            console=console
-        ) as progress:
-            task = progress.add_task("[cyan]Running enum4linux...", total=100)
-            run_command(cmd, "enum4linux enumeration", timeout=300, show_command=False)
-            progress.update(task, completed=100)
+        enum4linux_cmd = f"enum4linux -a {config.target_ip}"
+        console.print(f"\n[bold]Command:[/bold] [yellow]{enum4linux_cmd}[/yellow]")
+        console.print("[dim]Output streams live below. [bold yellow]Press Ctrl+Z to skip.[/bold yellow][/dim]\n")
 
-        # Read output file and display key findings
+        config.commands_run.append({
+            'command': enum4linux_cmd,
+            'description': 'enum4linux enumeration',
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+
+        # Stream output to terminal via tee, saving to file simultaneously
+        tee_cmd = f"{enum4linux_cmd} 2>&1 | tee '{output_file}'"
+        process = subprocess.Popen(
+            tee_cmd,
+            shell=True,
+            stdin=subprocess.DEVNULL,
+            stdout=None,
+            stderr=None
+        )
+
+        import time
+        start_time = time.time()
+        timed_out = False
+        while process.poll() is None:
+            if config.skip_requested:
+                console.print("\n[yellow]Skipping enum4linux...[/yellow]")
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except Exception:
+                    process.kill()
+                break
+            if time.time() - start_time > 600:
+                console.print("\n[yellow]enum4linux timed out after 10 minutes[/yellow]")
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except Exception:
+                    process.kill()
+                timed_out = True
+                break
+            time.sleep(0.5)
+
+        # Parse saved output for report
         if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
             with open(output_file, 'r') as f:
                 stdout = f.read()
 
-            console.print("\n[bold cyan]enum4linux Results:[/bold cyan]")
+            if timed_out:
+                console.print("[dim]Partial results captured before timeout[/dim]")
 
-            # OS information
-            os_lines = re.findall(r'\[\+\]\s*OS info.*', stdout)
-            for line in os_lines:
-                console.print(f"  [green]{line.strip()}[/green]")
-
-            # Domain/Workgroup
-            domain_lines = re.findall(r'\[\+\]\s*Got domain/workgroup.*', stdout)
-            for line in domain_lines:
-                console.print(f"  [green]{line.strip()}[/green]")
-
-            # Users found
+            # Summary of key findings
             users = re.findall(r'user:\[([^\]]+)\]', stdout)
-            if users:
-                console.print(f"\n  [bold green]Users found ({len(users)}):[/bold green]")
-                for user in users:
-                    console.print(f"    - {user}")
-
-            # Shares found
             shares_found = re.findall(r'^\s+([\w\$]+)\s+Disk', stdout, re.MULTILINE)
-            if shares_found:
-                console.print(f"\n  [bold green]Shares found ({len(shares_found)}):[/bold green]")
-                for share in shares_found:
-                    console.print(f"    - {share}")
-
-            # Password policy
-            policy_match = re.search(r'Minimum password length:\s*(\d+)', stdout)
-            lockout_match = re.search(r'Account Lockout Threshold:\s*(\d+)', stdout)
-            if policy_match or lockout_match:
-                console.print(f"\n  [bold green]Password Policy:[/bold green]")
-                if policy_match:
-                    console.print(f"    Min length: {policy_match.group(1)}")
-                if lockout_match:
-                    threshold = lockout_match.group(1)
-                    color = "bold red" if threshold == "0" else "green"
-                    console.print(f"    Lockout threshold: [{color}]{threshold}[/{color}]")
-
-            # Groups
             groups = re.findall(r'group:\[([^\]]+)\]', stdout)
-            if groups:
-                console.print(f"\n  [bold green]Groups found ({len(groups)}):[/bold green]")
-                for group in groups[:10]:
-                    console.print(f"    - {group}")
-                if len(groups) > 10:
-                    console.print(f"    [dim]... and {len(groups) - 10} more (see full output)[/dim]")
 
-            console.print(f"\n  [dim]Full output saved to: {output_file}[/dim]")
+            if users or shares_found or groups:
+                console.print(f"\n[bold cyan]enum4linux Summary:[/bold cyan]")
+                if users:
+                    console.print(f"  [green]Users: {len(users)}[/green]")
+                if shares_found:
+                    console.print(f"  [green]Shares: {len(shares_found)}[/green]")
+                if groups:
+                    console.print(f"  [green]Groups: {len(groups)}[/green]")
+
+            console.print(f"  [dim]Full output: {output_file}[/dim]")
 
             # Add to report
             enum4linux_report = ""
@@ -1105,9 +1105,7 @@ def enumerate_smb():
                 group_list = '\n'.join(f'- {g}' for g in groups)
                 enum4linux_report += f"**Groups ({len(groups)}):**\n{group_list}\n\n"
             if enum4linux_report:
-                add_to_report("enum4linux Enumeration", enum4linux_report, commands=f"enum4linux -a {config.target_ip}")
-        else:
-            console.print("[yellow]enum4linux returned no output[/yellow]")
+                add_to_report("enum4linux Enumeration", enum4linux_report, commands=enum4linux_cmd)
 
 def check_active_directory():
     """Check if target appears to be Active Directory"""
@@ -1181,6 +1179,15 @@ def enumerate_active_directory():
             task = progress.add_task("[cyan]Discovering SMB services...", total=100)
             stdout, stderr, code = run_command(cmd, "NetExec SMB discovery", show_command=False)
             progress.update(task, completed=100)
+
+        # Check for netexec DB schema errors
+        if "Schema mismatch" in stdout or "Schema mismatch" in stderr:
+            console.print("[bold red]NetExec database schema error detected![/bold red]")
+            console.print("[yellow]Fix: rm -f ~/.nxc/workspaces/default/smb.db[/yellow]")
+            console.print("[dim]Then re-run the scan. NetExec will rebuild the database.[/dim]")
+            save_output("netexec_smb_discovery.txt", stdout)
+            return
+
         save_output("netexec_smb_discovery.txt", stdout)
 
         if username and password:
