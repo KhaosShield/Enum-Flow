@@ -1,8 +1,8 @@
-# HTB Enumeration Tool v1.0rc2
+# HTB Enumeration Tool v1.1
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-1.0rc2-blue.svg)
+![Version](https://img.shields.io/badge/version-1.1-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.8+-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-orange.svg)
 ![Platform](https://img.shields.io/badge/platform-Kali%20Linux-lightgrey.svg)
@@ -20,15 +20,22 @@
 
 A Python-based enumeration tool that automates reconnaissance for HackTheBox labs, Pro Labs, and CTF challenges. It conducts systematic enumeration across multiple attack vectors, generates detailed reports, and integrates popular security tools into a single workflow.
 
-## What's New in v1.0rc2
+## What's New in v1.1
 
-- **Network Range Support** - CIDR notation (10.10.110.0/24) and range notation (10.10.110.1-254)
-- **Host Discovery** - Automatic ping sweep to find live hosts in network ranges
-- **Per-Host Enumeration** - Organized output with subdirectories for each discovered host
-- **BloodHound Integration** - AD enumeration with bloodhound-python
-- **Kerbrute Support** - Kerberos user enumeration
-- **Improved FTP Enumeration** - Using nmap scripts for reliability
-- **Additional AD Tools** - Kerberoasting, AS-REP roasting, credential testing
+### Features
+- **Credential reuse across AD phases** — credentials are asked once and shared across BloodHound, Kerberoasting, deep share enumeration, and GPP extraction
+- **enum4linux live terminal output** — streams results directly to terminal in real-time with parsed summary (users, shares, groups, password policy)
+- **Critical finding highlights** — exploitation paths (psexec, evil-winrm, secretsdump) render in a bordered red panel with bold command strings
+- **Progress spinners on all AD phases** — SMB, LDAP, and Kerberos enumeration now show spinners with Ctrl+Z skip hints
+
+### Bug Fixes
+- LDAP dump no longer hangs (result/time limits added)
+- NetExec credential validation fixed (`[+]` pattern, LDAP fallback for service accounts)
+- Web enumeration now detects ports 8080/8443
+- Gobuster VHOST results now parsed and reported
+- Shell injection via credentials prevented
+- enum4linux no longer prompts for password
+- NetExec DB schema errors detected with fix instructions
 
 ## Features
 
@@ -44,6 +51,25 @@ A Python-based enumeration tool that automates reconnaissance for HackTheBox lab
 - SSL/TLS certificate analysis and vulnerability testing
 - Comprehensive markdown report generation
 
+### Active Directory
+
+- **Single credential prompt** — enter once, reused across all AD sub-phases
+- **NetExec** SMB/LDAP/WinRM/RDP/MSSQL credential validation
+- **LDAP fallback** for service accounts that fail SMB auth
+- **BloodHound** data collection with bloodhound-python
+- **Kerberoasting** via NetExec and Impacket
+- **AS-REP roasting** with and without credentials
+- **Deep share enumeration** for sensitive files
+- **GPP password extraction** from SYSVOL
+- **Credential matrix** — tests creds against all discovered services
+- **Exploitation panel** — highlighted psexec, evil-winrm, secretsdump commands
+
+### SMB Enumeration
+
+- Null session and guest access detection
+- enum4linux with **live terminal streaming** and parsed results
+- Share discovery and user enumeration
+
 ### Advanced Enumeration
 
 - Web vulnerability scanning with Nikto
@@ -53,8 +79,6 @@ A Python-based enumeration tool that automates reconnaissance for HackTheBox lab
 - NFS share enumeration
 - SNMP community string discovery
 - NetBIOS and RPC enumeration
-- Impacket-based Kerberos attacks (AS-REP roasting, Kerberoasting)
-- BloodHound data collection for AD environments
 
 ---
 
@@ -73,7 +97,7 @@ Enhance functionality with these optional tools:
 | Category | Tools |
 |----------|-------|
 | Web Fuzzing | feroxbuster, ffuf |
-| SMB/AD | smbclient, smbmap, enum4linux-ng, bloodhound-python |
+| SMB/AD | smbclient, smbmap, enum4linux, bloodhound-python |
 | LDAP/Kerberos | ldapsearch, kerbrute, impacket-scripts |
 | DNS | dig, dnsenum |
 | Web Scanning | whatweb, nikto, wpscan, joomscan, sqlmap |
@@ -166,16 +190,16 @@ Automatic /etc/hosts update with discovered hostnames.
 Extract information from SSL/TLS certificates.
 
 **Phase 5: Web Enumeration**
-Directory brute-forcing, VHOST discovery, technology detection.
+Directory brute-forcing, VHOST discovery, technology detection. Supports ports 80, 443, 8080, and 8443.
 
 **Phase 6: DNS Enumeration**
 Zone transfer attempts and DNS record enumeration.
 
 **Phase 7: Active Directory Enumeration**
-NetExec, BloodHound, AS-REP roasting, Kerberoasting.
+Single credential prompt with NetExec SMB/LDAP enumeration, BloodHound collection, Kerberoasting, AS-REP roasting, deep share search, and GPP password extraction. Credentials are entered once and reused across all sub-phases. Exploitation paths highlighted in a red panel.
 
 **Phase 8: SMB Enumeration**
-Share enumeration, null sessions, user discovery.
+Share enumeration, null sessions, user discovery, enum4linux with live terminal output.
 
 **Phase 9: Additional Services**
 FTP, SSH, MySQL, MSSQL, RDP, SNMP enumeration.
@@ -204,8 +228,12 @@ Full enumeration pipeline runs for each selected host.
 ├── enumeration_report.md       # Comprehensive report
 ├── nmap_initial.txt            # Initial port scan
 ├── nmap_detailed.txt           # Detailed service scan
+├── enum4linux.txt              # enum4linux full output
 ├── gobuster_port80.txt         # Web directory results
 ├── netexec_*.txt               # NetExec outputs
+├── credential_validation.txt   # Credential test results
+├── asrep_hashes.txt            # AS-REP roastable hashes
+├── kerberoast_hashes.txt       # Kerberoastable hashes
 └── [service]_port[N].txt       # Service-specific results
 ```
 
@@ -230,7 +258,8 @@ Color-coded terminal output with progress indicators:
 - **Green**: Success/Found
 - **Yellow**: Warnings/Optional
 - **Cyan**: Information/Progress
-- **Red**: Errors/Failed
+- **Red**: Errors/Critical findings/Exploitation paths
+- **Bold Yellow**: Exploit commands (copy-paste ready)
 
 ---
 
@@ -268,8 +297,11 @@ Run with sudo: `sudo ./htb_enum.py`
 **Timeout errors on large networks**
 Use single host mode or reduce scope.
 
-**NetExec not working**
-Verify installation: `netexec --version`
+**NetExec schema mismatch error**
+Remove the stale database: `rm -f ~/.nxc/workspaces/default/smb.db`
+
+**enum4linux timeout**
+The tool has a 10-minute timeout. Use Ctrl+Z to skip if needed.
 
 ## License
 
@@ -282,11 +314,13 @@ This tool integrates and automates popular security tools:
 - Gobuster by OJ Reeves
 - NetExec by Pennyw0rth
 - BloodHound by SpecterOps
+- enum4linux by Mark Lowe
+- Impacket by SecureAuth
 - SecLists by Daniel Miessler
 - Rich library by Will McGugan
 
 ---
 
-**Version**: v1.0rc2
+**Version**: v1.1
 **Author**: [@KhaosShield](https://github.com/KhaosShield)
-**Last Updated**: February 2, 2026
+**Last Updated**: February 3, 2026
