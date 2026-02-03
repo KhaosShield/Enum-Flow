@@ -1029,82 +1029,198 @@ def enumerate_active_directory():
     # SMB Enumeration with NetExec
     if '445' in config.discovered_ports or '139' in config.discovered_ports:
         console.print("\n[bold cyan]SMB Enumeration with NetExec[/bold cyan]")
-        
+        console.print("[dim]Enumerating SMB services. [bold yellow]Press Ctrl+Z to skip.[/bold yellow][/dim]\n")
+
         # Basic SMB check
         cmd = f"netexec smb {config.target_ip}"
-        stdout, stderr, code = run_command(cmd, "NetExec SMB discovery")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=console
+        ) as progress:
+            task = progress.add_task("[cyan]Discovering SMB services...", total=100)
+            stdout, stderr, code = run_command(cmd, "NetExec SMB discovery", show_command=False)
+            progress.update(task, completed=100)
         save_output("netexec_smb_discovery.txt", stdout)
-        
+
         if username and password:
             # Authenticated enumeration
             auth_cmd = f"netexec smb {config.target_ip} -u '{username}' -p '{password}'"
             if domain:
                 auth_cmd += f" -d '{domain}'"
-            
-            console.print("[cyan]Testing credentials...[/cyan]")
-            stdout, stderr, code = run_command(auth_cmd, "NetExec credential test")
-            
-            if "Pwn3d!" in stdout or "+" in stdout:
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                console=console
+            ) as progress:
+                task = progress.add_task("[cyan]Testing credentials via SMB...", total=100)
+                stdout, stderr, code = run_command(auth_cmd, "NetExec credential test", show_command=False)
+                progress.update(task, completed=100)
+
+            creds_valid = "Pwn3d!" in stdout or "[+]" in stdout
+
+            # LDAP fallback if SMB auth failed (useful for service accounts like svc-alfresco)
+            if not creds_valid and ('389' in config.discovered_ports or '636' in config.discovered_ports):
+                console.print("[yellow]SMB auth failed, trying LDAP fallback...[/yellow]")
+                ldap_auth_cmd = f"netexec ldap {config.target_ip} -u '{username}' -p '{password}'"
+                if domain:
+                    ldap_auth_cmd += f" -d '{domain}'"
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    console=console
+                ) as progress:
+                    task = progress.add_task("[cyan]Testing credentials via LDAP...", total=100)
+                    stdout_ldap, stderr_ldap, code_ldap = run_command(ldap_auth_cmd, "NetExec LDAP credential test", show_command=False)
+                    progress.update(task, completed=100)
+                if "[+]" in stdout_ldap:
+                    creds_valid = True
+                    auth_cmd = ldap_auth_cmd
+                    console.print("[green]✓ Credentials valid via LDAP![/green]")
+
+            if creds_valid:
                 console.print("[green]✓ Credentials valid![/green]")
-                
+
                 # Enumerate shares
                 cmd = f"{auth_cmd} --shares"
-                stdout, stderr, code = run_command(cmd, "Enumerating SMB shares")
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    console=console
+                ) as progress:
+                    task = progress.add_task("[cyan]Enumerating SMB shares...", total=100)
+                    stdout, stderr, code = run_command(cmd, "Enumerating SMB shares", show_command=False)
+                    progress.update(task, completed=100)
                 save_output("netexec_shares.txt", stdout)
-                
+
                 # Enumerate users
                 cmd = f"{auth_cmd} --users"
-                stdout, stderr, code = run_command(cmd, "Enumerating users")
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    console=console
+                ) as progress:
+                    task = progress.add_task("[cyan]Enumerating domain users...", total=100)
+                    stdout, stderr, code = run_command(cmd, "Enumerating users", show_command=False)
+                    progress.update(task, completed=100)
                 save_output("netexec_users.txt", stdout)
-                
+
                 # Enumerate groups
                 cmd = f"{auth_cmd} --groups"
-                stdout, stderr, code = run_command(cmd, "Enumerating groups")
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    console=console
+                ) as progress:
+                    task = progress.add_task("[cyan]Enumerating domain groups...", total=100)
+                    stdout, stderr, code = run_command(cmd, "Enumerating groups", show_command=False)
+                    progress.update(task, completed=100)
                 save_output("netexec_groups.txt", stdout)
-                
+
                 # Password policy
                 cmd = f"{auth_cmd} --pass-pol"
-                stdout, stderr, code = run_command(cmd, "Getting password policy")
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    console=console
+                ) as progress:
+                    task = progress.add_task("[cyan]Getting password policy...", total=100)
+                    stdout, stderr, code = run_command(cmd, "Getting password policy", show_command=False)
+                    progress.update(task, completed=100)
                 save_output("netexec_passpol.txt", stdout)
             else:
                 console.print("[red]✗ Credentials invalid[/red]")
         else:
             # Unauthenticated enumeration
             console.print("[cyan]Attempting unauthenticated enumeration...[/cyan]")
-            
+
             # Check for null sessions
             cmd = f"netexec smb {config.target_ip} -u '' -p ''"
-            stdout, stderr, code = run_command(cmd, "Null session check")
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                console=console
+            ) as progress:
+                task = progress.add_task("[cyan]Checking null sessions...", total=100)
+                stdout, stderr, code = run_command(cmd, "Null session check", show_command=False)
+                progress.update(task, completed=100)
             save_output("netexec_null_session.txt", stdout)
-            
+
             # Guest access
             cmd = f"netexec smb {config.target_ip} -u 'guest' -p ''"
-            stdout, stderr, code = run_command(cmd, "Guest session check")
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                console=console
+            ) as progress:
+                task = progress.add_task("[cyan]Checking guest access...", total=100)
+                stdout, stderr, code = run_command(cmd, "Guest session check", show_command=False)
+                progress.update(task, completed=100)
             save_output("netexec_guest_session.txt", stdout)
     
     # LDAP Enumeration
     if '389' in config.discovered_ports or '636' in config.discovered_ports:
         console.print("\n[bold cyan]LDAP Enumeration[/bold cyan]")
-        
+        console.print("[dim]Enumerating LDAP services. [bold yellow]Press Ctrl+Z to skip.[/bold yellow][/dim]\n")
+
         # Anonymous bind check
         cmd = f"ldapsearch -x -H ldap://{config.target_ip} -s base namingcontexts"
-        stdout, stderr, code = run_command(cmd, "LDAP anonymous bind")
-        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=console
+        ) as progress:
+            task = progress.add_task("[cyan]Checking anonymous LDAP bind...", total=100)
+            stdout, stderr, code = run_command(cmd, "LDAP anonymous bind", show_command=False)
+            progress.update(task, completed=100)
+
         if stdout and "namingContexts" in stdout:
             console.print("[green]✓ Anonymous LDAP bind successful[/green]")
             save_output("ldap_anonymous.txt", stdout)
-            
+
             # Extract naming contexts
             contexts = re.findall(r'namingContexts: (.+)', stdout)
             if contexts:
                 console.print(f"[green]Found naming contexts:[/green]")
                 for ctx in contexts:
                     console.print(f"  • {ctx}")
-                    
-                    # Dump LDAP with naming context
-                    cmd = f"ldapsearch -x -H ldap://{config.target_ip} -b '{ctx}'"
-                    stdout_dump, stderr, code = run_command(cmd, f"LDAP dump: {ctx}", timeout=300)
+
+                    # Dump LDAP with naming context (limited to 1000 entries, 30s server timeout)
+                    cmd = f"ldapsearch -x -H ldap://{config.target_ip} -b '{ctx}' -z 1000 -l 30"
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[progress.description]{task.description}"),
+                        BarColumn(),
+                        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                        console=console
+                    ) as progress:
+                        task = progress.add_task(f"[cyan]Dumping LDAP: {ctx}...", total=100)
+                        stdout_dump, stderr, code = run_command(cmd, f"LDAP dump: {ctx}", timeout=120, show_command=False)
+                        progress.update(task, completed=100)
                     if stdout_dump:
+                        entry_count = len(re.findall(r'^dn: ', stdout_dump, re.MULTILINE))
+                        console.print(f"[green]✓ LDAP dump complete: {entry_count} entries[/green]")
                         save_output(f"ldap_dump_{ctx.replace(',', '_').replace('=', '_')}.txt", stdout_dump)
         else:
             console.print("[yellow]Anonymous LDAP bind not allowed[/yellow]")
@@ -1112,27 +1228,43 @@ def enumerate_active_directory():
     # Kerberos (AS-REP Roasting)
     if '88' in config.discovered_ports:
         console.print("\n[bold cyan]Kerberos Enumeration[/bold cyan]")
-        
+        console.print("[dim]Enumerating Kerberos services. [bold yellow]Press Ctrl+Z to skip.[/bold yellow][/dim]\n")
+
         if tool_exists('kerbrute'):
-            console.print("[cyan]User enumeration with kerbrute...[/cyan]")
-            
             # Need a user list
             userlist = "/usr/share/seclists/Usernames/xato-net-10-million-usernames.txt"
             if os.path.exists(userlist):
                 domain_name = domain if domain else "htb.local"
                 cmd = f"kerbrute userenum --dc {config.target_ip} -d {domain_name} {userlist}"
-                stdout, stderr, code = run_command(cmd, "Kerbrute user enumeration", timeout=300)
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    console=console
+                ) as progress:
+                    task = progress.add_task("[cyan]Enumerating users with kerbrute...", total=100)
+                    stdout, stderr, code = run_command(cmd, "Kerbrute user enumeration", timeout=300, show_command=False)
+                    progress.update(task, completed=100)
                 save_output("kerbrute_users.txt", stdout)
-        
+
         # AS-REP Roasting with NetExec
         if username:
-            console.print("[cyan]Attempting AS-REP roasting...[/cyan]")
             cmd = f"netexec ldap {config.target_ip} -u '{username}' -p '{password}' --asreproast asrep_hashes.txt"
             if domain:
                 cmd += f" -d '{domain}'"
-            
-            stdout, stderr, code = run_command(cmd, "AS-REP roasting")
-            
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                console=console
+            ) as progress:
+                task = progress.add_task("[cyan]Attempting AS-REP roasting...", total=100)
+                stdout, stderr, code = run_command(cmd, "AS-REP roasting", show_command=False)
+                progress.update(task, completed=100)
+
             if os.path.exists("asrep_hashes.txt"):
                 console.print("[green]✓ AS-REP roastable accounts found![/green]")
                 shutil.move("asrep_hashes.txt", f"{config.output_dir}/asrep_hashes.txt")
