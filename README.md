@@ -1,14 +1,14 @@
-# HTB Enumeration Tool v1.1
+# EnumFlow v1.3
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-1.1-blue.svg)
+![Version](https://img.shields.io/badge/version-1.3-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.8+-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-orange.svg)
 ![Platform](https://img.shields.io/badge/platform-Kali%20Linux-lightgrey.svg)
 ![Maintained](https://img.shields.io/badge/maintained-yes-brightgreen.svg)
 
-**Comprehensive automated enumeration tool for HackTheBox labs, Pro Labs, and CTF challenges**
+**Comprehensive automated enumeration tool for penetration testing and CTF challenges**
 
 *Author: [@KhaosShield](https://github.com/KhaosShield)*
 
@@ -18,19 +18,39 @@
 
 ## Overview
 
-A Python-based enumeration tool that automates reconnaissance for HackTheBox labs, Pro Labs, and CTF challenges. It conducts systematic enumeration across multiple attack vectors, generates detailed reports, and integrates popular security tools into a single workflow.
+A Python-based enumeration tool that automates reconnaissance across penetration testing engagements and CTF challenges. It conducts systematic enumeration across multiple attack vectors, streams a live browser dashboard, and generates detailed HTML and Markdown reports.
+
+## What's New in v1.3
+
+### Features
+- **Live browser dashboard** with real-time SSE updates — phases, ports, findings, commands
+- **Prompt banner** — pulsing red alert in the browser whenever terminal input is required
+- **Prompts & Status tab** — logs every terminal question with waiting/answered state
+- **Markdown rendering** — finding cards render bold, code, tables, and code blocks as HTML
+- **Clickable port rows** — expand service/version detail on click
+- **Active-command topbar** — shows the current running command description
+- **Null-result cards** — phases that complete cleanly show a muted "(no findings)" card instead of being empty
+- **Dashboard keep-alive** — server stays up after scan completion so the browser remains accessible; press Ctrl+C to exit
+- **Refresh after completion** — reloading the dashboard correctly replays the completed state
+
+## What's New in v1.2
+
+### Features
+- **Live browser dashboard** at `http://127.0.0.1:5000` (Flask SSE)
+- **HTML report** generated alongside the Markdown report
+- **`--no-browser`** flag suppresses auto-opening the browser
 
 ## What's New in v1.1
 
 ### Features
 - **Credential reuse across AD phases** — credentials are asked once and shared across BloodHound, Kerberoasting, deep share enumeration, and GPP extraction
-- **enum4linux live terminal output** — streams results directly to terminal in real-time with parsed summary (users, shares, groups, password policy)
-- **Critical finding highlights** — exploitation paths (psexec, evil-winrm, secretsdump) render in a bordered red panel with bold command strings
-- **Progress spinners on all AD phases** — SMB, LDAP, and Kerberos enumeration now show spinners with Ctrl+Z skip hints
+- **enum4linux live terminal output** — streams results directly to terminal in real-time with parsed summary
+- **Critical finding highlights** — exploitation paths render in a bordered red panel
+- **Progress spinners on all AD phases**
 
 ### Bug Fixes
-- LDAP dump no longer hangs (result/time limits added)
-- NetExec credential validation fixed (`[+]` pattern, LDAP fallback for service accounts)
+- LDAP dump no longer hangs
+- NetExec credential validation fixed
 - Web enumeration now detects ports 8080/8443
 - Gobuster VHOST results now parsed and reported
 - Shell injection via credentials prevented
@@ -49,7 +69,8 @@ A Python-based enumeration tool that automates reconnaissance for HackTheBox lab
 - Active Directory enumeration with NetExec and BloodHound integration
 - Multi-service protocol enumeration (SMB, LDAP, DNS, FTP, SSH, etc.)
 - SSL/TLS certificate analysis and vulnerability testing
-- Comprehensive markdown report generation
+- Live browser dashboard with SSE streaming
+- Comprehensive HTML and Markdown report generation
 
 ### Active Directory
 
@@ -92,8 +113,6 @@ A Python-based enumeration tool that automates reconnaissance for HackTheBox lab
 
 ### Optional Tools
 
-Enhance functionality with these optional tools:
-
 | Category | Tools |
 |----------|-------|
 | Web Fuzzing | feroxbuster, ffuf |
@@ -108,6 +127,7 @@ Enhance functionality with these optional tools:
 
 - Python 3.8 or higher
 - rich library (auto-installed if missing)
+- flask library (for browser dashboard)
 - bloodhound library (installed via install.sh)
 
 ## Installation
@@ -115,20 +135,17 @@ Enhance functionality with these optional tools:
 ### Quick Install (Kali Linux)
 
 ```bash
-# Clone the repository
-git clone https://github.com/KhaosShield/htb-enum.git
-cd htb-enum
-
-# Run the installer
+git clone https://github.com/KhaosShield/enumflow.git
+cd enumflow
 chmod +x install.sh
 sudo ./install.sh
 ```
 
 The installer will:
 - Install all required and optional tools
-- Install Python dependencies (rich, bloodhound)
+- Install Python dependencies (rich, bloodhound, flask)
 - Download kerbrute from GitHub
-- Optionally create a global symlink
+- Optionally create a global symlink (`enumflow`)
 
 ---
 
@@ -138,22 +155,25 @@ The installer will:
 
 ```bash
 # Interactive mode
-./htb_enum.py
+./enumflow.py
 
 # Specify target IP
-./htb_enum.py -t 10.10.11.123
+./enumflow.py -t 10.10.11.123
 
-# Network range (Pro Labs)
-./htb_enum.py -t 10.10.110.0/24
+# Network range
+./enumflow.py -t 10.10.110.0/24
 
 # IP range notation
-./htb_enum.py -t 10.10.110.1-254
+./enumflow.py -t 10.10.110.1-254
 
 # Quick scan (skips deep enumeration)
-./htb_enum.py -t 10.10.11.123 --quick
+./enumflow.py -t 10.10.11.123 --quick
 
 # Stealth mode (slower, quieter)
-./htb_enum.py -t 10.10.11.123 --stealth
+./enumflow.py -t 10.10.11.123 --stealth
+
+# Suppress auto-opening browser
+./enumflow.py -t 10.10.11.123 --no-browser
 ```
 
 ### Command-Line Options
@@ -163,6 +183,7 @@ The installer will:
 -s, --stealth         Use stealth mode (slower, quieter scans)
 --threads N           Number of threads (default: 50)
 --quick               Quick scan (skip deep enumeration)
+--no-browser          Disable auto-opening browser dashboard
 -h, --help            Show help message
 ```
 
@@ -170,7 +191,7 @@ The installer will:
 
 | Key | Action |
 |-----|--------|
-| Ctrl+C | Exit entire script |
+| Ctrl+C | Exit script (or close dashboard after scan completes) |
 | Ctrl+Z | Skip current phase (then type `fg` + Enter to continue) |
 
 ## Enumeration Phases
@@ -196,7 +217,7 @@ Directory brute-forcing, VHOST discovery, technology detection. Supports ports 8
 Zone transfer attempts and DNS record enumeration.
 
 **Phase 7: Active Directory Enumeration**
-Single credential prompt with NetExec SMB/LDAP enumeration, BloodHound collection, Kerberoasting, AS-REP roasting, deep share search, and GPP password extraction. Credentials are entered once and reused across all sub-phases. Exploitation paths highlighted in a red panel.
+Single credential prompt with NetExec SMB/LDAP enumeration, BloodHound collection, Kerberoasting, AS-REP roasting, deep share search, and GPP password extraction.
 
 **Phase 8: SMB Enumeration**
 Share enumeration, null sessions, user discovery, enum4linux with live terminal output.
@@ -225,7 +246,8 @@ Full enumeration pipeline runs for each selected host.
 **Single Host:**
 ```
 <IP_ADDRESS>/
-├── enumeration_report.md       # Comprehensive report
+├── enumeration_report.md       # Markdown report
+├── enumeration_report.html     # HTML report (browser-friendly)
 ├── nmap_initial.txt            # Initial port scan
 ├── nmap_detailed.txt           # Detailed service scan
 ├── enum4linux.txt              # enum4linux full output
@@ -243,13 +265,8 @@ Full enumeration pipeline runs for each selected host.
 ├── host_discovery.txt          # Live host scan results
 ├── enumeration_report.md       # Combined report
 ├── 10_10_110_2/               # Per-host subdirectory
-│   ├── nmap_initial.txt
-│   ├── nmap_detailed.txt
 │   └── ...
-├── 10_10_110_5/
-│   └── ...
-└── 10_10_110_100/
-    └── ...
+└── ...
 ```
 
 ### Terminal Output
@@ -263,26 +280,6 @@ Color-coded terminal output with progress indicators:
 
 ---
 
-## Pro Labs Usage
-
-For HackTheBox Pro Labs like Dante, Offshore, or RastaLabs:
-
-```bash
-# Discover all live hosts first
-./htb_enum.py -t 10.10.110.0/24
-
-# Select 'all' to enumerate every host, or pick specific ones
-# Results organized in per-host subdirectories
-```
-
-**Tips for Pro Labs:**
-- Start with host discovery to map the network
-- Enumerate one host at a time for large networks
-- Look for credential reuse across hosts
-- Check BloodHound output for AD attack paths
-
----
-
 ## Troubleshooting
 
 **No ports found**
@@ -292,7 +289,7 @@ Verify target is reachable with ping. Check firewall rules.
 Run `sudo ./install.sh` to install missing tools.
 
 **Permission denied updating /etc/hosts**
-Run with sudo: `sudo ./htb_enum.py`
+Run with sudo: `sudo ./enumflow.py`
 
 **Timeout errors on large networks**
 Use single host mode or reduce scope.
@@ -302,6 +299,9 @@ Remove the stale database: `rm -f ~/.nxc/workspaces/default/smb.db`
 
 **enum4linux timeout**
 The tool has a 10-minute timeout. Use Ctrl+Z to skip if needed.
+
+**Dashboard not updating after scan finishes**
+The scan keeps the dashboard server alive — press Ctrl+C in the terminal to exit.
 
 ## License
 
@@ -321,6 +321,5 @@ This tool integrates and automates popular security tools:
 
 ---
 
-**Version**: v1.1
+**Version**: v1.3
 **Author**: [@KhaosShield](https://github.com/KhaosShield)
-**Last Updated**: February 3, 2026

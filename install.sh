@@ -13,7 +13,7 @@ NC='\033[0m' # No Color
 echo -e "${BLUE}"
 cat << "EOF"
 ╔═══════════════════════════════════════════════════════════╗
-║     HTB Enumeration Tool v1.0rc2 - Installer              ║
+║            EnumFlow v1.3 — Installer                      ║
 ╚═══════════════════════════════════════════════════════════╝
 EOF
 echo -e "${NC}"
@@ -136,17 +136,17 @@ else
 fi
 
 # Make script executable
-echo -e "\n${BLUE}[*] Setting up HTB Enumeration Tool...${NC}"
-chmod +x htb_enum.py
+echo -e "\n${BLUE}[*] Setting up EnumFlow...${NC}"
+chmod +x enumflow.py
 echo -e "${GREEN}[✓]${NC} Script made executable"
 
 # Create symlink (optional)
 read -p "$(echo -e ${YELLOW}Create symlink to /usr/local/bin for global access? [y/N]:${NC} )" -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    ln -sf "$(pwd)/htb_enum.py" /usr/local/bin/htb-enum
-    echo -e "${GREEN}[✓]${NC} Symlink created: htb-enum"
-    echo -e "${GREEN}[✓]${NC} You can now run the tool from anywhere with: htb-enum"
+    ln -sf "$(pwd)/enumflow.py" /usr/local/bin/enumflow
+    echo -e "${GREEN}[✓]${NC} Symlink created: enumflow"
+    echo -e "${GREEN}[✓]${NC} You can now run the tool from anywhere with: enumflow"
 fi
 
 # Verify installation
@@ -182,10 +182,10 @@ if [ "$ALL_OK" = true ]; then
 EOF
     echo -e "${NC}"
     echo -e "${GREEN}[✓] All required tools installed${NC}"
-    echo -e "${BLUE}[*] You can now run: ./htb_enum.py${NC}"
-    
-    if [ -L "/usr/local/bin/htb-enum" ]; then
-        echo -e "${BLUE}[*] Or globally with: htb-enum${NC}"
+    echo -e "${BLUE}[*] You can now run: ./enumflow.py${NC}"
+
+    if [ -L "/usr/local/bin/enumflow" ]; then
+        echo -e "${BLUE}[*] Or globally with: enumflow${NC}"
     fi
 else
     echo -e "${YELLOW}"
@@ -203,9 +203,9 @@ echo -e "${BLUE}═════════════════════�
 
 # Show quick start
 echo -e "${BLUE}Quick Start:${NC}"
-echo -e "  1. Run: ${GREEN}./htb_enum.py -t <target-ip>${NC}"
-echo -e "  2. Or: ${GREEN}./htb_enum.py${NC} for interactive mode"
-echo -e "  3. Check: ${GREEN}./htb_enum.py --help${NC} for all options\n"
+echo -e "  1. Run: ${GREEN}./enumflow.py -t <target-ip>${NC}"
+echo -e "  2. Or: ${GREEN}./enumflow.py${NC} for interactive mode"
+echo -e "  3. Check: ${GREEN}./enumflow.py --help${NC} for all options\n"
 
 echo -e "${YELLOW}Note:${NC} Some tools may require PATH updates. If netexec is not found,"
 echo -e "      run: ${GREEN}source ~/.bashrc${NC} or restart your terminal.\n"

@@ -1,4 +1,4 @@
-"""web — browser dashboard and HTML report for HTB-Enum."""
+"""web — browser dashboard and HTML report for EnumFlow."""
 
 import queue
 import threading
@@ -23,6 +23,7 @@ _sse_queues = []
 _sse_lock = threading.Lock()
 _phase_has_finding = False
 _current_phase_name = ''
+_scan_complete_data = None
 console = Console()
 
 
@@ -34,7 +35,7 @@ def init(config_obj):
 
 def emit_event(event_type, data):
     """Broadcast an SSE event to all connected dashboard clients."""
-    global _phase_has_finding, _current_phase_name
+    global _phase_has_finding, _current_phase_name, _scan_complete_data
 
     if not _config.dashboard_enabled:
         return
@@ -63,6 +64,9 @@ def emit_event(event_type, data):
                         pass
         _phase_has_finding = False
         _current_phase_name = ''
+
+    elif event_type == 'scan_complete':
+        _scan_complete_data = data
 
     payload = json.dumps({'type': event_type, 'data': data})
     with _sse_lock:
@@ -104,6 +108,9 @@ def start_dashboard(open_browser=True):
                 }
             })
             yield f'data: {init_payload}\n\n'
+            if _scan_complete_data is not None:
+                sc_payload = json.dumps({'type': 'scan_complete', 'data': _scan_complete_data})
+                yield f'data: {sc_payload}\n\n'
             with _sse_lock:
                 _sse_queues.append(client_q)
             try:
