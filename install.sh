@@ -117,8 +117,8 @@ fi
 
 # Install Python dependencies
 echo -e "\n${BLUE}[*] Installing Python dependencies...${NC}"
-pip3 install rich bloodhound --break-system-packages > /dev/null 2>&1
-echo -e "${GREEN}[✓]${NC} Python dependencies installed (rich, bloodhound-python)"
+pip3 install rich bloodhound flask --break-system-packages > /dev/null 2>&1
+echo -e "${GREEN}[✓]${NC} Python dependencies installed (rich, bloodhound-python, flask)"
 
 # Install Kerbrute (Go binary from GitHub)
 echo -e "\n${BLUE}[*] Installing Kerbrute...${NC}"

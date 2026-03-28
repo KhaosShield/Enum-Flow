@@ -14,6 +14,11 @@ from datetime import datetime
 import signal
 import shutil
 import glob
+import queue
+import threading
+import webbrowser
+import json
+import time
 
 try:
     from rich.console import Console
@@ -31,6 +36,12 @@ except ImportError:
     from rich import box
 
 console = Console()
+
+try:
+    from flask import Flask, Response
+    FLASK_AVAILABLE = True
+except ImportError:
+    FLASK_AVAILABLE = False
 
 # Global configuration
 class Config:
@@ -54,6 +65,11 @@ class Config:
         self.skip_requested = False  # Flag for Ctrl+Z skip request
         self.live_hosts = []  # Live hosts discovered in network range
         self.is_range_scan = False  # Flag for network range scanning
+        self.depth_prompted = False  # Only ask for recursion depth once
+        self.dashboard_enabled = False
+        self._sse_queues = []
+        self._sse_lock = threading.Lock()
+        self.no_browser = False
         
         # Tool paths
         self.tools = {
@@ -105,24 +121,424 @@ def run_phase(phase_func, phase_name, *args, **kwargs):
     """Execute a phase with skip capability"""
     config.skip_requested = False
     config.phase_skipped = False
-    
+
+    emit_event('phase_start', {'phase': phase_name, 'target': config.target_ip})
+
     try:
         result = phase_func(*args, **kwargs)
-        
+
         # Check if phase was skipped
         if config.skip_requested or config.phase_skipped:
             console.print(f"[yellow]⊘ Skipped {phase_name}[/yellow]\n")
             add_to_report(phase_name, "**Status:** Skipped by user\n", found_items=0)
             config.skip_requested = False  # Reset for next phase
+            emit_event('phase_complete', {'phase': phase_name, 'skipped': True})
             return None
-            
+
+        emit_event('phase_complete', {'phase': phase_name, 'skipped': False})
         return result
     except KeyboardInterrupt:
         # Ctrl+C exits entire script
         raise
     except Exception as e:
         console.print(f"[red]Error in {phase_name}: {e}[/red]")
+        emit_event('phase_complete', {'phase': phase_name, 'skipped': False})
         return None
+
+
+# ── Browser dashboard / HTML report ─────────────────────────────────────────
+
+DASHBOARD_HTML = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HTB-Enum Dashboard</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--green:#3fb950;--cyan:#58a6ff;--yellow:#d29922;--orange:#ff7b25}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Courier New',monospace;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+#topbar{background:var(--panel);border-bottom:1px solid var(--border);padding:10px 20px;display:flex;align-items:center;gap:20px;flex-shrink:0}
+.logo{color:var(--orange);font-weight:bold;font-size:15px}
+.tgt{color:var(--cyan);font-size:13px}
+.badge{padding:2px 10px;border-radius:10px;font-size:11px;background:#1f6feb;color:#fff}
+.badge.done{background:#238636}
+.stat{color:var(--muted);font-size:12px}.stat b{color:var(--text)}
+.timer{margin-left:auto;color:var(--muted);font-size:12px}
+#main{display:flex;flex:1;overflow:hidden}
+#sidebar{width:240px;background:var(--panel);border-right:1px solid var(--border);overflow-y:auto;flex-shrink:0;display:flex;flex-direction:column}
+.side-section{padding:14px 0}
+.side-title{padding:0 14px 8px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:1px}
+.phase-item{padding:7px 14px;display:flex;align-items:center;gap:9px;font-size:12px;border-left:2px solid transparent}
+.phase-item.running{border-left-color:var(--cyan);background:rgba(88,166,255,.06)}
+.phase-item.done{border-left-color:var(--green)}
+.phase-item.skipped{border-left-color:var(--yellow)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--border);flex-shrink:0}
+.phase-item.running .dot{background:var(--cyan);animation:pulse 1s infinite}
+.phase-item.done .dot{background:var(--green)}
+.phase-item.skipped .dot{background:var(--yellow)}
+.lbl{color:var(--muted);flex:1}
+.phase-item.running .lbl,.phase-item.done .lbl{color:var(--text)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+#port-area{padding:12px 14px;border-top:1px solid var(--border);margin-top:auto}
+.pchip{display:inline-block;background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.25);border-radius:3px;padding:1px 7px;margin:2px;font-size:10px;color:var(--cyan)}
+#feed-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#feed-bar{padding:10px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0}
+#feed-bar h2{font-size:13px;color:var(--muted);font-weight:normal;flex:1}
+.btn{padding:3px 11px;border:1px solid var(--border);border-radius:4px;background:var(--panel);color:var(--muted);cursor:pointer;font:12px 'Courier New',monospace}
+.btn.active{border-color:var(--cyan);color:var(--cyan)}
+#rpt-btn{background:#238636;border-color:#2ea043;color:#fff;display:none}
+#feed{flex:1;overflow-y:auto;padding:14px 18px}
+.ph-hdr{border-left:3px solid var(--cyan);padding:6px 10px;margin:14px 0 6px;font-size:12px}
+.ph-hdr.done{border-left-color:var(--green)}.ph-hdr.skip{border-left-color:var(--yellow)}
+.ph-name{font-weight:bold;color:var(--text)}.ph-st{color:var(--muted);font-size:11px;margin-left:6px}
+.port-row{background:rgba(63,185,80,.05);border:1px solid rgba(63,185,80,.2);border-radius:3px;padding:5px 10px;margin-bottom:5px;font-size:11px;display:flex;gap:14px}
+.port-row .pn{color:var(--green);font-weight:bold}.port-row .ps{color:var(--cyan)}.port-row .pv{color:var(--muted)}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:5px;margin-bottom:10px;overflow:hidden}
+.card-hdr{padding:9px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none}
+.card-hdr:hover{background:rgba(255,255,255,.03)}
+.cbadge{width:5px;height:5px;border-radius:50%;background:var(--cyan);flex-shrink:0}
+.ctitle{font-size:12px;font-weight:bold;color:var(--cyan);flex:1}
+.ctog{color:var(--muted);font-size:11px}
+.card-body{padding:10px 14px;border-top:1px solid var(--border);font-size:11px;line-height:1.7;white-space:pre-wrap;color:var(--text);max-height:360px;overflow-y:auto;display:none}
+.card-body.open{display:block}
+#done-banner{background:rgba(35,134,54,.12);border:1px solid #238636;border-radius:5px;padding:14px;margin-bottom:14px;display:none}
+#done-banner h3{color:var(--green);margin-bottom:6px;font-size:14px}
+#done-banner p{color:var(--muted);font-size:11px}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="logo">&#9632; HTB-Enum</span>
+  <span class="tgt" id="tgt">Connecting...</span>
+  <span class="badge" id="sbadge">Running</span>
+  <span class="stat">Ports: <b id="sp">0</b></span>
+  <span class="stat">Hosts: <b id="sh">0</b></span>
+  <span class="stat">Cmds: <b id="sc">0</b></span>
+  <span class="timer">&#9201; <span id="elapsed">0:00</span></span>
+</div>
+<div id="main">
+  <div id="sidebar">
+    <div class="side-section">
+      <div class="side-title">Phases</div>
+      <div id="plist"></div>
+    </div>
+    <div id="port-area">
+      <div class="side-title" style="margin-bottom:8px">Open Ports</div>
+      <div id="pchips"></div>
+    </div>
+  </div>
+  <div id="feed-wrap">
+    <div id="feed-bar">
+      <h2>Live Findings</h2>
+      <button class="btn active" id="ascroll" onclick="toggleAS()">Auto-scroll ON</button>
+      <button class="btn" id="rpt-btn" onclick="window.open('/report','_blank')">&#128196; Open Report</button>
+    </div>
+    <div id="feed">
+      <div id="done-banner"><h3>&#10003; Scan Complete</h3><p id="done-stats"></p></div>
+    </div>
+  </div>
+</div>
+<script>
+const PHASES=['Port Discovery','Service Detection','Hostname Integration','SSL Analysis',
+  'Web Enumeration','DNS Enumeration','Active Directory','SMB Enumeration',
+  'Additional Services','Advanced Web','Deep Enumeration'];
+const pstate={};let as=true,pc=0,hc=0,cc=0,t0=Date.now();
+const plist=document.getElementById('plist');
+PHASES.forEach((n)=>{
+  const el=document.createElement('div');
+  el.className='phase-item';
+  el.id='pi_'+n.replace(/\\W+/g,'_');
+  el.innerHTML='<div class="dot"></div><span class="lbl">'+n+'</span>';
+  plist.appendChild(el);
+  pstate[n.toLowerCase()]={el};
+});
+function findP(name){
+  const l=name.toLowerCase().replace(/.*?phase\\s*\\d+:\\s*/i,'').trim();
+  for(const[k,v] of Object.entries(pstate)){if(l.includes(k)||k.includes(l))return v;}
+  for(const[k,v] of Object.entries(pstate)){
+    const parts=l.split(/[\\s:]+/);
+    if(parts.some(p=>p.length>3&&k.includes(p)))return v;
+  }
+  return null;
+}
+function phaseId(name){return 'ph_'+name.replace(/\\W+/g,'_');}
+function toggleAS(){as=!as;const b=document.getElementById('ascroll');b.textContent='Auto-scroll '+(as?'ON':'OFF');b.classList.toggle('active',as);}
+setInterval(()=>{const s=Math.floor((Date.now()-t0)/1000);document.getElementById('elapsed').textContent=Math.floor(s/60)+':'+(s%60<10?'0':'')+s%60;},1000);
+const es=new EventSource('/stream');
+es.onmessage=e=>{try{const ev=JSON.parse(e.data);handle(ev.type,ev.data);}catch(ex){}};
+function handle(type,d){
+  const feed=document.getElementById('feed');
+  if(type==='init'){
+    document.getElementById('tgt').textContent=d.target||'--';
+    t0=Date.now()-((d.elapsed_s||0)*1000);
+  }else if(type==='phase_start'){
+    const p=findP(d.phase);if(p)p.el.className='phase-item running';
+    const h=document.createElement('div');h.className='ph-hdr';h.id=phaseId(d.phase);
+    h.innerHTML='<span class="ph-name">'+esc(d.phase)+'</span><span class="ph-st">&#8212; running...</span>';
+    feed.appendChild(h);scroll();
+  }else if(type==='phase_complete'){
+    const p=findP(d.phase);if(p)p.el.className='phase-item '+(d.skipped?'skipped':'done');
+    const h=document.getElementById(phaseId(d.phase));
+    if(h){h.className='ph-hdr '+(d.skipped?'skip':'done');h.querySelector('.ph-st').textContent=d.skipped?' &#8212; skipped':' &#8212; done';}
+  }else if(type==='port_found'){
+    pc++;document.getElementById('sp').textContent=pc;
+    const r=document.createElement('div');r.className='port-row';
+    r.innerHTML='<span class="pn">'+esc(d.port)+'/tcp</span><span class="ps">'+esc(d.service)+'</span><span class="pv">'+esc(d.version||'')+'</span>';
+    feed.appendChild(r);
+    const c=document.createElement('span');c.className='pchip';c.textContent=d.port;document.getElementById('pchips').appendChild(c);
+    scroll();
+  }else if(type==='host_found'){
+    hc++;document.getElementById('sh').textContent=hc;
+  }else if(type==='cmd_run'){
+    cc++;document.getElementById('sc').textContent=cc;
+  }else if(type==='finding'){
+    const card=document.createElement('div');card.className='card';
+    const auto=feed.querySelectorAll('.card').length<5;
+    card.innerHTML='<div class="card-hdr" onclick="tog(this)"><div class="cbadge"></div><div class="ctitle">'+esc(d.section)+'</div><div class="ctog">'+(auto?'&#9650;':'&#9660;')+'</div></div>'
+      +'<div class="card-body'+(auto?' open':'')+'">'+esc(d.content)+'</div>';
+    feed.appendChild(card);scroll();
+  }else if(type==='scan_complete'){
+    document.getElementById('sbadge').className='badge done';
+    document.getElementById('sbadge').textContent='Complete';
+    document.getElementById('rpt-btn').style.display='inline-block';
+    const b=document.getElementById('done-banner');b.style.display='block';
+    document.getElementById('done-stats').textContent='Ports: '+(d.ports||0)+'  |  Hosts: '+(d.hosts||0)+'  |  Commands: '+(d.commands||0);
+    feed.insertBefore(b,feed.firstChild);scroll();
+  }
+}
+function tog(hdr){const body=hdr.nextElementSibling;body.classList.toggle('open');hdr.querySelector('.ctog').innerHTML=body.classList.contains('open')?'&#9650;':'&#9660;';}
+function esc(s){const d=document.createElement('div');d.textContent=String(s||'');return d.innerHTML;}
+function scroll(){if(as){const f=document.getElementById('feed');f.scrollTop=f.scrollHeight;}}
+</script>
+</body>
+</html>'''
+
+HTML_REPORT_TEMPLATE = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HTB-Enum Report - {{TARGET}}</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--green:#3fb950;--cyan:#58a6ff;--yellow:#d29922;--orange:#ff7b25}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Courier New',monospace;padding:32px;max-width:1200px;margin:0 auto}
+h1{color:var(--orange);font-size:22px;margin-bottom:6px}
+.subtitle{color:var(--muted);font-size:13px;margin-bottom:24px}
+.info-row{display:flex;gap:32px;margin-bottom:28px;font-size:12px;flex-wrap:wrap}
+.info-row span{color:var(--muted)}.info-row b{color:var(--text)}
+.stats{display:flex;gap:14px;margin-bottom:32px;flex-wrap:wrap}
+.stat-card{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:14px 22px;min-width:130px}
+.stat-card .val{font-size:26px;font-weight:bold;color:var(--cyan)}
+.stat-card .lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-top:4px}
+h2{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin:28px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;margin-bottom:24px;font-size:12px}
+th{background:var(--panel);color:var(--muted);padding:8px 12px;text-align:left;font-weight:normal;border:1px solid var(--border)}
+td{padding:8px 12px;border:1px solid var(--border);color:var(--text);vertical-align:top}
+td code{color:var(--cyan);font-size:11px;word-break:break-all}
+tr:hover td{background:rgba(255,255,255,.02)}
+.acc-item{background:var(--panel);border:1px solid var(--border);border-radius:5px;margin-bottom:8px;overflow:hidden}
+.acc-hdr{padding:9px 14px;cursor:pointer;display:flex;align-items:center;gap:9px;user-select:none}
+.acc-hdr:hover{background:rgba(255,255,255,.03)}
+.acc-dot{width:5px;height:5px;border-radius:50%;background:var(--cyan);flex-shrink:0}
+.acc-title{font-size:12px;font-weight:bold;color:var(--cyan);flex:1}
+.acc-tog{color:var(--muted);font-size:11px}
+.acc-body{padding:10px 14px;border-top:1px solid var(--border);display:none}
+.acc-body.open{display:block}
+.acc-body pre{font-size:11px;line-height:1.7;white-space:pre-wrap;color:var(--text);max-height:480px;overflow-y:auto}
+</style>
+</head>
+<body>
+<h1>&#9632; HTB-Enum Report</h1>
+<div class="subtitle">Generated by HTB-Enum &nbsp;|&nbsp; {{DATE}}</div>
+<div class="info-row">
+  <span>Target: <b>{{TARGET}}</b></span>
+  <span>Duration: <b>{{DURATION}}</b></span>
+  <span>Hostnames: <b>{{HOSTNAMES}}</b></span>
+</div>
+<div class="stats">
+  <div class="stat-card"><div class="val">{{PORT_COUNT}}</div><div class="lbl">Open Ports</div></div>
+  <div class="stat-card"><div class="val">{{HOST_COUNT}}</div><div class="lbl">Hostnames</div></div>
+  <div class="stat-card"><div class="val">{{CMD_COUNT}}</div><div class="lbl">Commands Run</div></div>
+</div>
+<h2>Open Ports</h2>
+<table>
+<thead><tr><th>Port</th><th>Service</th><th>Version</th></tr></thead>
+<tbody>{{PORT_ROWS}}</tbody>
+</table>
+<h2>Findings</h2>
+<div>{{ACCORDION}}</div>
+<h2>Commands Log</h2>
+<table>
+<thead><tr><th>Timestamp</th><th>Description</th><th>Command</th></tr></thead>
+<tbody>{{CMD_ROWS}}</tbody>
+</table>
+<script>
+function tog(h){const b=h.nextElementSibling;b.classList.toggle('open');h.querySelector('.acc-tog').textContent=b.classList.contains('open')?'\\u25b2':'\\u25bc';}
+</script>
+</body>
+</html>'''
+
+
+def emit_event(event_type, data):
+    """Broadcast an SSE event to all connected dashboard clients."""
+    if not config.dashboard_enabled:
+        return
+    payload = json.dumps({'type': event_type, 'data': data})
+    with config._sse_lock:
+        dead = []
+        for q in config._sse_queues:
+            try:
+                q.put_nowait(payload)
+            except Exception:
+                dead.append(q)
+        for q in dead:
+            config._sse_queues.remove(q)
+
+
+def start_dashboard(open_browser=True):
+    """Start the Flask live-dashboard in a background thread."""
+    if not FLASK_AVAILABLE:
+        console.print("[yellow]⚠ Flask not installed — browser dashboard disabled.[/yellow]")
+        console.print("[yellow]  Install with: pip3 install flask[/yellow]")
+        return
+
+    import logging
+    logging.getLogger('werkzeug').setLevel(logging.ERROR)
+
+    app = Flask(__name__)
+
+    @app.route('/')
+    def index():
+        return Response(DASHBOARD_HTML, mimetype='text/html')
+
+    @app.route('/stream')
+    def stream():
+        def generate():
+            client_q = queue.Queue()
+            init_payload = json.dumps({
+                'type': 'init',
+                'data': {
+                    'target': config.target_ip,
+                    'elapsed_s': int((datetime.now() - config.start_time).total_seconds()),
+                }
+            })
+            yield f'data: {init_payload}\n\n'
+            with config._sse_lock:
+                config._sse_queues.append(client_q)
+            try:
+                while True:
+                    try:
+                        msg = client_q.get(timeout=25)
+                        yield f'data: {msg}\n\n'
+                    except queue.Empty:
+                        yield ':keepalive\n\n'
+            finally:
+                with config._sse_lock:
+                    try:
+                        config._sse_queues.remove(client_q)
+                    except ValueError:
+                        pass
+        return Response(
+            generate(),
+            mimetype='text/event-stream',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+        )
+
+    @app.route('/report')
+    def report():
+        if not config.output_dir:
+            return Response('<h1>Report not yet available</h1>', mimetype='text/html', status=404)
+        path = os.path.join(config.output_dir, 'enumeration_report.html')
+        if os.path.exists(path):
+            with open(path, encoding='utf-8') as f:
+                return Response(f.read(), mimetype='text/html')
+        return Response(
+            '<body style="background:#0d1117;color:#e6edf3;font-family:monospace;padding:40px">'
+            '<h2>Report not yet generated</h2><p>Check back when the scan completes.</p></body>',
+            mimetype='text/html', status=404,
+        )
+
+    def _run():
+        try:
+            app.run(host='127.0.0.1', port=5000, threaded=True, use_reloader=False)
+        except OSError:
+            console.print("[yellow]⚠ Port 5000 in use — dashboard unavailable[/yellow]")
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    if open_browser:
+        time.sleep(0.5)
+        try:
+            webbrowser.open('http://127.0.0.1:5000')
+        except Exception:
+            pass
+
+    config.dashboard_enabled = True
+    console.print("[green]✓[/green] Dashboard: [cyan]http://127.0.0.1:5000[/cyan]")
+
+
+def generate_html_report():
+    """Generate a self-contained HTML report from collected findings."""
+    duration = str(datetime.now() - config.start_time).split('.')[0]
+
+    # Parse markdown_report list into titled sections
+    full_md = ''.join(config.markdown_report)
+    accordion_html = ''
+    for i, block in enumerate(full_md.split('\n## ')):
+        if not block.strip():
+            continue
+        parts = block.split('\n', 1)
+        title = parts[0].strip()
+        body = parts[1] if len(parts) > 1 else ''
+        esc_body = body.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        open_cls = ' open' if i < 3 else ''
+        tog_icon = '&#9650;' if i < 3 else '&#9660;'
+        accordion_html += (
+            f'<div class="acc-item">'
+            f'<div class="acc-hdr" onclick="tog(this)">'
+            f'<div class="acc-dot"></div>'
+            f'<div class="acc-title">{title}</div>'
+            f'<div class="acc-tog">{tog_icon}</div>'
+            f'</div>'
+            f'<div class="acc-body{open_cls}"><pre>{esc_body}</pre></div>'
+            f'</div>\n'
+        )
+
+    # Ports table
+    port_rows_html = ''
+    for port, info in sorted(config.discovered_ports.items(),
+                              key=lambda x: int(x[0]) if x[0].isdigit() else 9999):
+        svc = info.get('service', '-')
+        ver = (info.get('version') or '-').replace('<', '&lt;').replace('>', '&gt;')
+        port_rows_html += f'<tr><td>{port}</td><td>{svc}</td><td>{ver}</td></tr>\n'
+
+    # Commands log
+    cmd_rows_html = ''
+    for entry in config.commands_run:
+        ts = entry.get('timestamp', '')
+        desc = entry.get('description', '').replace('<', '&lt;').replace('>', '&gt;')
+        cmd = entry.get('command', '').replace('<', '&lt;').replace('>', '&gt;')
+        cmd_rows_html += f'<tr><td>{ts}</td><td>{desc}</td><td><code>{cmd}</code></td></tr>\n'
+
+    html = HTML_REPORT_TEMPLATE
+    html = html.replace('{{TARGET}}', config.target_ip or 'Unknown')
+    html = html.replace('{{DATE}}', config.start_time.strftime('%Y-%m-%d %H:%M'))
+    html = html.replace('{{DURATION}}', duration)
+    html = html.replace('{{PORT_COUNT}}', str(len(config.discovered_ports)))
+    html = html.replace('{{HOST_COUNT}}', str(len(config.discovered_hosts)))
+    html = html.replace('{{CMD_COUNT}}', str(len(config.commands_run)))
+    html = html.replace('{{HOSTNAMES}}', ', '.join(config.discovered_hosts) or 'None')
+    html = html.replace('{{PORT_ROWS}}', port_rows_html)
+    html = html.replace('{{ACCORDION}}', accordion_html)
+    html = html.replace('{{CMD_ROWS}}', cmd_rows_html)
+
+    report_path = os.path.join(config.output_dir, 'enumeration_report.html')
+    with open(report_path, 'w', encoding='utf-8') as f:
+        f.write(html)
+    console.print(f"[green]✓[/green] HTML report: [cyan]{report_path}[/cyan]")
+    return report_path
+
 
 def banner():
     """Display tool banner"""
@@ -195,7 +611,8 @@ def run_command(cmd, description="", timeout=None, show_command=True):
             'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         config.commands_run.append(command_entry)
-        
+        emit_event('cmd_run', {})
+
         # Show what we're running
         if show_command:
             console.print(f"\n[bold cyan]Running:[/bold cyan] [dim]{description}[/dim]")
@@ -300,6 +717,7 @@ def add_to_report(section, content, commands=None, found_items=None):
         config.markdown_report.append("**Status:** Nothing found\n\n")
     
     config.markdown_report.append(content)
+    emit_event('finding', {'section': section, 'content': content[:2000]})
 
 def validate_target(target):
     """Validate target IP, CIDR notation, or range"""
@@ -587,6 +1005,7 @@ def parse_nmap_output(output):
                     'version': version
                 }
                 current_port = port
+                emit_event('port_found', {'port': port, 'service': service, 'version': version})
         
         # Look for hostnames
         hostname_match = re.search(r'(\S+\.htb)', line, re.IGNORECASE)
@@ -594,6 +1013,7 @@ def parse_nmap_output(output):
             hostname = hostname_match.group(1)
             if hostname not in config.discovered_hosts:
                 config.discovered_hosts.append(hostname)
+                emit_event('host_found', {'hostname': hostname})
                 console.print(f"[green]✓[/green] Found hostname: [bold]{hostname}[/bold]")
                 
                 # Rename output directory to use hostname (only on first discovery)
@@ -680,16 +1100,20 @@ def enumerate_web_directories(port='80'):
             console.print("[yellow]Skipping directory enumeration[/yellow]")
             return
     
-    # Ask for scan depth
-    depth = console.input(f"\n[bold cyan]Enter recursion depth (1-5) [default: 2]:[/bold cyan] ").strip()
-    try:
-        depth = int(depth) if depth else 2
-        depth = max(1, min(5, depth))
-    except ValueError:
-        depth = 2
-    
-    config.scan_depth = depth
-    console.print(f"[green]✓[/green] Using recursion depth: {depth}\n")
+    # Ask for scan depth only once across all hosts
+    if not config.depth_prompted:
+        depth = console.input(f"\n[bold cyan]Enter recursion depth (1-5) [default: 2]:[/bold cyan] ").strip()
+        try:
+            depth = int(depth) if depth else 2
+            depth = max(1, min(5, depth))
+        except ValueError:
+            depth = 2
+        config.scan_depth = depth
+        config.depth_prompted = True
+        console.print(f"[green]✓[/green] Using recursion depth: {depth}\n")
+    else:
+        depth = config.scan_depth
+        console.print(f"[green]✓[/green] Using recursion depth: {depth}\n")
     
     # Determine protocol
     is_https = '443' in config.discovered_ports or 'ssl' in config.discovered_ports.get(port, {}).get('service', '').lower()
@@ -2440,7 +2864,8 @@ def main():
     parser.add_argument('-s', '--stealth', action='store_true', help='Use stealth mode (slower, quieter)')
     parser.add_argument('--threads', type=int, default=50, help='Number of threads (default: 50)')
     parser.add_argument('--quick', action='store_true', help='Quick scan (skip deep enumeration)')
-    
+    parser.add_argument('--no-browser', action='store_true', help='Disable auto-opening browser dashboard')
+
     args = parser.parse_args()
     
     # Display banner
@@ -2466,7 +2891,10 @@ def main():
     
     # Create output directory
     create_output_directory()
-    
+
+    # Start browser dashboard
+    start_dashboard(open_browser=not args.no_browser)
+
     # Set up signal handler for Ctrl+Z to skip phases
     signal.signal(signal.SIGTSTP, handle_skip_signal)
     
@@ -2625,15 +3053,23 @@ def main():
             run_phase(rpc_enumeration, "Phase 11: RPC Enumeration")
             run_phase(impacket_enumeration, "Phase 11: Impacket Enumeration")
         
-        # Generate final report
+        # Generate final reports
         report_path = generate_markdown_report()
-        
+        html_report_path = generate_html_report()
+        emit_event('scan_complete', {
+            'ports': len(config.discovered_ports),
+            'hosts': len(config.discovered_hosts),
+            'commands': len(config.commands_run),
+        })
+
         # Final summary
+        dashboard_line = "\n[cyan]Dashboard:[/cyan] http://127.0.0.1:5000/report" if config.dashboard_enabled else ""
         console.print(Panel.fit(
             f"""[bold green]Enumeration Complete![/bold green]
 
 [cyan]Results saved to:[/cyan] {config.output_dir}
-[cyan]Report available at:[/cyan] {report_path}
+[cyan]Markdown report:[/cyan] {report_path}
+[cyan]HTML report:[/cyan] {html_report_path}{dashboard_line}
 
 [yellow]Total time:[/yellow] {datetime.now() - config.start_time}
 """,
