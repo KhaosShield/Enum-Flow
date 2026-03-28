@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HTB-Enum Dashboard</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--green:#3fb950;--cyan:#58a6ff;--yellow:#d29922;--orange:#ff7b25}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Courier New',monospace;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+#topbar{background:var(--panel);border-bottom:1px solid var(--border);padding:10px 20px;display:flex;align-items:center;gap:20px;flex-shrink:0}
+.logo{color:var(--orange);font-weight:bold;font-size:15px}
+.tgt{color:var(--cyan);font-size:13px}
+.badge{padding:2px 10px;border-radius:10px;font-size:11px;background:#1f6feb;color:#fff}
+.badge.done{background:#238636}
+.stat{color:var(--muted);font-size:12px}.stat b{color:var(--text)}
+.timer{margin-left:auto;color:var(--muted);font-size:12px}
+#main{display:flex;flex:1;overflow:hidden}
+#sidebar{width:240px;background:var(--panel);border-right:1px solid var(--border);overflow-y:auto;flex-shrink:0;display:flex;flex-direction:column}
+.side-section{padding:14px 0}
+.side-title{padding:0 14px 8px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:1px}
+.phase-item{padding:7px 14px;display:flex;align-items:center;gap:9px;font-size:12px;border-left:2px solid transparent}
+.phase-item.running{border-left-color:var(--cyan);background:rgba(88,166,255,.06)}
+.phase-item.done{border-left-color:var(--green)}
+.phase-item.skipped{border-left-color:var(--yellow)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--border);flex-shrink:0}
+.phase-item.running .dot{background:var(--cyan);animation:pulse 1s infinite}
+.phase-item.done .dot{background:var(--green)}
+.phase-item.skipped .dot{background:var(--yellow)}
+.lbl{color:var(--muted);flex:1}
+.phase-item.running .lbl,.phase-item.done .lbl{color:var(--text)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+#port-area{padding:12px 14px;border-top:1px solid var(--border);margin-top:auto}
+.pchip{display:inline-block;background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.25);border-radius:3px;padding:1px 7px;margin:2px;font-size:10px;color:var(--cyan)}
+#feed-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#feed-bar{padding:10px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0}
+#feed-bar h2{font-size:13px;color:var(--muted);font-weight:normal;flex:1}
+.btn{padding:3px 11px;border:1px solid var(--border);border-radius:4px;background:var(--panel);color:var(--muted);cursor:pointer;font:12px 'Courier New',monospace}
+.btn.active{border-color:var(--cyan);color:var(--cyan)}
+#rpt-btn{background:#238636;border-color:#2ea043;color:#fff;display:none}
+#feed{flex:1;overflow-y:auto;padding:14px 18px}
+.ph-hdr{border-left:3px solid var(--cyan);padding:6px 10px;margin:14px 0 6px;font-size:12px}
+.ph-hdr.done{border-left-color:var(--green)}.ph-hdr.skip{border-left-color:var(--yellow)}
+.ph-name{font-weight:bold;color:var(--text)}.ph-st{color:var(--muted);font-size:11px;margin-left:6px}
+.port-row{background:rgba(63,185,80,.05);border:1px solid rgba(63,185,80,.2);border-radius:3px;padding:5px 10px;margin-bottom:5px;font-size:11px;display:flex;gap:14px}
+.port-row .pn{color:var(--green);font-weight:bold}.port-row .ps{color:var(--cyan)}.port-row .pv{color:var(--muted)}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:5px;margin-bottom:10px;overflow:hidden}
+.card-hdr{padding:9px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none}
+.card-hdr:hover{background:rgba(255,255,255,.03)}
+.cbadge{width:5px;height:5px;border-radius:50%;background:var(--cyan);flex-shrink:0}
+.ctitle{font-size:12px;font-weight:bold;color:var(--cyan);flex:1}
+.ctog{color:var(--muted);font-size:11px}
+.card-body{padding:10px 14px;border-top:1px solid var(--border);font-size:11px;line-height:1.7;white-space:pre-wrap;color:var(--text);max-height:360px;overflow-y:auto;display:none}
+.card-body.open{display:block}
+#done-banner{background:rgba(35,134,54,.12);border:1px solid #238636;border-radius:5px;padding:14px;margin-bottom:14px;display:none}
+#done-banner h3{color:var(--green);margin-bottom:6px;font-size:14px}
+#done-banner p{color:var(--muted);font-size:11px}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="logo">&#9632; HTB-Enum</span>
+  <span class="tgt" id="tgt">Connecting...</span>
+  <span class="badge" id="sbadge">Running</span>
+  <span class="stat">Ports: <b id="sp">0</b></span>
+  <span class="stat">Hosts: <b id="sh">0</b></span>
+  <span class="stat">Cmds: <b id="sc">0</b></span>
+  <span class="timer">&#9201; <span id="elapsed">0:00</span></span>
+</div>
+<div id="main">
+  <div id="sidebar">
+    <div class="side-section">
+      <div class="side-title">Phases</div>
+      <div id="plist"></div>
+    </div>
+    <div id="port-area">
+      <div class="side-title" style="margin-bottom:8px">Open Ports</div>
+      <div id="pchips"></div>
+    </div>
+  </div>
+  <div id="feed-wrap">
+    <div id="feed-bar">
+      <h2>Live Findings</h2>
+      <button class="btn active" id="ascroll" onclick="toggleAS()">Auto-scroll ON</button>
+      <button class="btn" id="rpt-btn" onclick="window.open('/report','_blank')">&#128196; Open Report</button>
+    </div>
+    <div id="feed">
+      <div id="done-banner"><h3>&#10003; Scan Complete</h3><p id="done-stats"></p></div>
+    </div>
+  </div>
+</div>
+<script>
+const PHASES=['Port Discovery','Service Detection','Hostname Integration','SSL Analysis',
+  'Web Enumeration','DNS Enumeration','Active Directory','SMB Enumeration',
+  'Additional Services','Advanced Web','Deep Enumeration'];
+const pstate={};let as=true,pc=0,hc=0,cc=0,t0=Date.now();
+const plist=document.getElementById('plist');
+PHASES.forEach((n)=>{
+  const el=document.createElement('div');
+  el.className='phase-item';
+  el.id='pi_'+n.replace(/\W+/g,'_');
+  el.innerHTML='<div class="dot"></div><span class="lbl">'+n+'</span>';
+  plist.appendChild(el);
+  pstate[n.toLowerCase()]={el};
+});
+function findP(name){
+  const l=name.toLowerCase().replace(/.*?phase\s*\d+:\s*/i,'').trim();
+  for(const[k,v] of Object.entries(pstate)){if(l.includes(k)||k.includes(l))return v;}
+  for(const[k,v] of Object.entries(pstate)){
+    const parts=l.split(/[\s:]+/);
+    if(parts.some(p=>p.length>3&&k.includes(p)))return v;
+  }
+  return null;
+}
+function phaseId(name){return 'ph_'+name.replace(/\W+/g,'_');}
+function toggleAS(){as=!as;const b=document.getElementById('ascroll');b.textContent='Auto-scroll '+(as?'ON':'OFF');b.classList.toggle('active',as);}
+setInterval(()=>{const s=Math.floor((Date.now()-t0)/1000);document.getElementById('elapsed').textContent=Math.floor(s/60)+':'+(s%60<10?'0':'')+s%60;},1000);
+const es=new EventSource('/stream');
+es.onmessage=e=>{try{const ev=JSON.parse(e.data);handle(ev.type,ev.data);}catch(ex){}};
+function handle(type,d){
+  const feed=document.getElementById('feed');
+  if(type==='init'){
+    document.getElementById('tgt').textContent=d.target||'--';
+    t0=Date.now()-((d.elapsed_s||0)*1000);
+  }else if(type==='phase_start'){
+    const p=findP(d.phase);if(p)p.el.className='phase-item running';
+    const h=document.createElement('div');h.className='ph-hdr';h.id=phaseId(d.phase);
+    h.innerHTML='<span class="ph-name">'+esc(d.phase)+'</span><span class="ph-st">&#8212; running...</span>';
+    feed.appendChild(h);scroll();
+  }else if(type==='phase_complete'){
+    const p=findP(d.phase);if(p)p.el.className='phase-item '+(d.skipped?'skipped':'done');
+    const h=document.getElementById(phaseId(d.phase));
+    if(h){h.className='ph-hdr '+(d.skipped?'skip':'done');h.querySelector('.ph-st').textContent=d.skipped?' &#8212; skipped':' &#8212; done';}
+  }else if(type==='port_found'){
+    pc++;document.getElementById('sp').textContent=pc;
+    const r=document.createElement('div');r.className='port-row';
+    r.innerHTML='<span class="pn">'+esc(d.port)+'/tcp</span><span class="ps">'+esc(d.service)+'</span><span class="pv">'+esc(d.version||'')+'</span>';
+    feed.appendChild(r);
+    const c=document.createElement('span');c.className='pchip';c.textContent=d.port;document.getElementById('pchips').appendChild(c);
+    scroll();
+  }else if(type==='host_found'){
+    hc++;document.getElementById('sh').textContent=hc;
+  }else if(type==='cmd_run'){
+    cc++;document.getElementById('sc').textContent=cc;
+  }else if(type==='finding'){
+    const card=document.createElement('div');card.className='card';
+    const auto=feed.querySelectorAll('.card').length<5;
+    card.innerHTML='<div class="card-hdr" onclick="tog(this)"><div class="cbadge"></div><div class="ctitle">'+esc(d.section)+'</div><div class="ctog">'+(auto?'&#9650;':'&#9660;')+'</div></div>'
+      +'<div class="card-body'+(auto?' open':'')+'">'+esc(d.content)+'</div>';
+    feed.appendChild(card);scroll();
+  }else if(type==='scan_complete'){
+    document.getElementById('sbadge').className='badge done';
+    document.getElementById('sbadge').textContent='Complete';
+    document.getElementById('rpt-btn').style.display='inline-block';
+    const b=document.getElementById('done-banner');b.style.display='block';
+    document.getElementById('done-stats').textContent='Ports: '+(d.ports||0)+'  |  Hosts: '+(d.hosts||0)+'  |  Commands: '+(d.commands||0);
+    feed.insertBefore(b,feed.firstChild);scroll();
+  }
+}
+function tog(hdr){const body=hdr.nextElementSibling;body.classList.toggle('open');hdr.querySelector('.ctog').innerHTML=body.classList.contains('open')?'&#9650;':'&#9660;';}
+function esc(s){const d=document.createElement('div');d.textContent=String(s||'');return d.innerHTML;}
+function scroll(){if(as){const f=document.getElementById('feed');f.scrollTop=f.scrollHeight;}}
+</script>
+</body>
+</html>
