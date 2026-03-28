@@ -4,9 +4,14 @@
 <meta charset="utf-8">
 <title>HTB-Enum Dashboard</title>
 <style>
-:root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--green:#3fb950;--cyan:#58a6ff;--yellow:#d29922;--orange:#ff7b25}
+:root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--green:#3fb950;--cyan:#58a6ff;--yellow:#d29922;--orange:#ff7b25;--red:#f85149;--prompt-glow:rgba(248,81,73,.35)}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:'Courier New',monospace;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+#prompt-banner{position:fixed;top:0;left:0;right:0;z-index:9999;background:rgba(248,81,73,.92);border-bottom:2px solid var(--red);padding:10px 20px;display:none;align-items:center;gap:14px;font-size:13px;font-weight:bold;color:#fff;animation:prompt-pulse 1.4s ease-in-out infinite;backdrop-filter:blur(4px)}
+#prompt-banner .pb-icon{font-size:18px;flex-shrink:0}
+#prompt-banner .pb-msg{flex:1;font-size:12px;font-family:'Courier New',monospace}
+#prompt-banner .pb-label{font-size:11px;text-transform:uppercase;letter-spacing:1px;opacity:.85;flex-shrink:0}
+@keyframes prompt-pulse{0%,100%{box-shadow:0 0 0 0 var(--prompt-glow)}50%{box-shadow:0 4px 20px 4px var(--prompt-glow)}}
 #topbar{background:var(--panel);border-bottom:1px solid var(--border);padding:10px 20px;display:flex;align-items:center;gap:20px;flex-shrink:0}
 .logo{color:var(--orange);font-weight:bold;font-size:15px}
 .tgt{color:var(--cyan);font-size:13px}
@@ -14,6 +19,8 @@ body{background:var(--bg);color:var(--text);font-family:'Courier New',monospace;
 .badge.done{background:#238636}
 .stat{color:var(--muted);font-size:12px}.stat b{color:var(--text)}
 .timer{margin-left:auto;color:var(--muted);font-size:12px}
+#active-cmd{margin-left:12px;max-width:280px;color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-left:1px solid var(--border);padding-left:12px;display:none;align-items:center;gap:4px}
+#active-cmd .ac-arrow{color:var(--cyan)}
 #main{display:flex;flex:1;overflow:hidden}
 #sidebar{width:240px;background:var(--panel);border-right:1px solid var(--border);overflow-y:auto;flex-shrink:0;display:flex;flex-direction:column}
 .side-section{padding:14px 0}
@@ -33,30 +40,67 @@ body{background:var(--bg);color:var(--text);font-family:'Courier New',monospace;
 .pchip{display:inline-block;background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.25);border-radius:3px;padding:1px 7px;margin:2px;font-size:10px;color:var(--cyan)}
 #feed-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden}
 #feed-bar{padding:10px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0}
-#feed-bar h2{font-size:13px;color:var(--muted);font-weight:normal;flex:1}
 .btn{padding:3px 11px;border:1px solid var(--border);border-radius:4px;background:var(--panel);color:var(--muted);cursor:pointer;font:12px 'Courier New',monospace}
 .btn.active{border-color:var(--cyan);color:var(--cyan)}
-#rpt-btn{background:#238636;border-color:#2ea043;color:#fff;display:none}
-#feed{flex:1;overflow-y:auto;padding:14px 18px}
+.tab-btn{padding:4px 13px;border:none;background:none;color:var(--muted);cursor:pointer;font:12px 'Courier New',monospace;border-bottom:2px solid transparent;transition:color .15s,border-color .15s}
+.tab-btn.active{color:var(--cyan);border-bottom-color:var(--cyan)}
+.tab-btn.has-unread{color:var(--red)}
+.tab-pane{flex:1;overflow-y:auto;padding:14px 18px;display:none;flex-direction:column}
+.tab-pane.active{display:flex}
+#feed{min-height:0}
 .ph-hdr{border-left:3px solid var(--cyan);padding:6px 10px;margin:14px 0 6px;font-size:12px}
 .ph-hdr.done{border-left-color:var(--green)}.ph-hdr.skip{border-left-color:var(--yellow)}
 .ph-name{font-weight:bold;color:var(--text)}.ph-st{color:var(--muted);font-size:11px;margin-left:6px}
-.port-row{background:rgba(63,185,80,.05);border:1px solid rgba(63,185,80,.2);border-radius:3px;padding:5px 10px;margin-bottom:5px;font-size:11px;display:flex;gap:14px}
+.port-row{background:rgba(63,185,80,.05);border:1px solid rgba(63,185,80,.2);border-radius:3px;padding:5px 10px;margin-bottom:5px;font-size:11px;display:flex;gap:14px;flex-wrap:wrap;cursor:pointer;transition:background .12s}
+.port-row:hover{background:rgba(63,185,80,.12)}
 .port-row .pn{color:var(--green);font-weight:bold}.port-row .ps{color:var(--cyan)}.port-row .pv{color:var(--muted)}
+.port-detail{display:none;width:100%;padding:4px 0 2px 0;font-size:10px;color:var(--muted);border-top:1px solid rgba(63,185,80,.15);line-height:1.9;margin-top:4px}
+.port-detail.open{display:block}
+.port-row.expanded{background:rgba(63,185,80,.08)}
 .card{background:var(--panel);border:1px solid var(--border);border-radius:5px;margin-bottom:10px;overflow:hidden}
+.card.null-result .cbadge{background:var(--muted)}
+.card.null-result .ctitle{color:var(--muted);font-style:italic}
+.card.null-result .card-body{color:var(--muted)}
 .card-hdr{padding:9px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none}
 .card-hdr:hover{background:rgba(255,255,255,.03)}
 .cbadge{width:5px;height:5px;border-radius:50%;background:var(--cyan);flex-shrink:0}
 .ctitle{font-size:12px;font-weight:bold;color:var(--cyan);flex:1}
 .ctog{color:var(--muted);font-size:11px}
-.card-body{padding:10px 14px;border-top:1px solid var(--border);font-size:11px;line-height:1.7;white-space:pre-wrap;color:var(--text);max-height:360px;overflow-y:auto;display:none}
+.card-body{padding:10px 14px;border-top:1px solid var(--border);font-size:11px;line-height:1.7;color:var(--text);max-height:360px;overflow-y:auto;display:none}
 .card-body.open{display:block}
+.card-body table{width:100%;border-collapse:collapse;font-size:10px;margin:5px 0}
+.card-body th,.card-body td{padding:3px 8px;border:1px solid var(--border);text-align:left}
+.card-body th{color:var(--cyan);background:rgba(88,166,255,.06)}
+.card-body code{background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px;font-size:10px}
+.card-body pre{background:rgba(0,0,0,.3);padding:8px;border-radius:4px;overflow-x:auto;font-size:10px;line-height:1.6;border:1px solid var(--border)}
+.card-body pre code{background:none;padding:0}
+.card-body a{color:var(--cyan);text-decoration:none}
+.card-body a:hover{text-decoration:underline}
+.card-body ul{padding-left:18px;margin:4px 0}
+.card-body li{margin-bottom:2px}
+.card-body p{margin-bottom:6px}
+.card-body strong{color:var(--text)}
+.cmd-entry{padding:3px 10px;margin-bottom:3px;font-size:10px;color:var(--muted);border-left:2px solid var(--border);display:flex;gap:8px}
+.cmd-entry .ce-arrow{color:var(--cyan);flex-shrink:0}
 #done-banner{background:rgba(35,134,54,.12);border:1px solid #238636;border-radius:5px;padding:14px;margin-bottom:14px;display:none}
 #done-banner h3{color:var(--green);margin-bottom:6px;font-size:14px}
 #done-banner p{color:var(--muted);font-size:11px}
+.prompt-log-entry{padding:8px 12px;margin-bottom:8px;background:var(--panel);border:1px solid var(--border);border-radius:4px;font-size:11px}
+.prompt-log-entry.waiting{border-left:3px solid var(--red)}
+.prompt-log-entry.resolved{border-left:3px solid var(--green);opacity:.6}
+.pl-ts{color:var(--muted);font-size:10px;margin-bottom:3px}
+.pl-msg{color:var(--text);font-family:'Courier New',monospace;word-break:break-word}
+.pl-status{font-size:10px;margin-top:3px}
+.prompt-log-entry.waiting .pl-status{color:var(--red)}
+.prompt-log-entry.resolved .pl-status{color:var(--green)}
 </style>
 </head>
 <body>
+<div id="prompt-banner">
+  <span class="pb-icon">&#9888;</span>
+  <span class="pb-msg" id="pb-msg">Terminal input required</span>
+  <span class="pb-label">&#8592; Check your terminal</span>
+</div>
 <div id="topbar">
   <span class="logo">&#9632; HTB-Enum</span>
   <span class="tgt" id="tgt">Connecting...</span>
@@ -65,6 +109,10 @@ body{background:var(--bg);color:var(--text);font-family:'Courier New',monospace;
   <span class="stat">Hosts: <b id="sh">0</b></span>
   <span class="stat">Cmds: <b id="sc">0</b></span>
   <span class="timer">&#9201; <span id="elapsed">0:00</span></span>
+  <span id="active-cmd">
+    <span class="ac-arrow">&#9654;</span>
+    <span id="ac-text"></span>
+  </span>
 </div>
 <div id="main">
   <div id="sidebar">
@@ -79,12 +127,19 @@ body{background:var(--bg);color:var(--text);font-family:'Courier New',monospace;
   </div>
   <div id="feed-wrap">
     <div id="feed-bar">
-      <h2>Live Findings</h2>
+      <button class="tab-btn active" id="tab-live" onclick="switchTab('live')">Live Findings</button>
+      <button class="tab-btn" id="tab-prompts" onclick="switchTab('prompts')">Prompts &amp; Status</button>
+      <span style="flex:1"></span>
       <button class="btn active" id="ascroll" onclick="toggleAS()">Auto-scroll ON</button>
-      <button class="btn" id="rpt-btn" onclick="window.open('/report','_blank')">&#128196; Open Report</button>
+      <button class="btn" id="rpt-btn" onclick="window.open('/report','_blank')" style="display:none">&#128196; Open Report</button>
     </div>
-    <div id="feed">
-      <div id="done-banner"><h3>&#10003; Scan Complete</h3><p id="done-stats"></p></div>
+    <div id="tab-pane-live" class="tab-pane active">
+      <div id="feed">
+        <div id="done-banner"><h3>&#10003; Scan Complete</h3><p id="done-stats"></p></div>
+      </div>
+    </div>
+    <div id="tab-pane-prompts" class="tab-pane">
+      <div id="prompts-feed"></div>
     </div>
   </div>
 </div>
@@ -92,7 +147,8 @@ body{background:var(--bg);color:var(--text);font-family:'Courier New',monospace;
 const PHASES=['Port Discovery','Service Detection','Hostname Integration','SSL Analysis',
   'Web Enumeration','DNS Enumeration','Active Directory','SMB Enumeration',
   'Additional Services','Advanced Web','Deep Enumeration'];
-const pstate={};let as=true,pc=0,hc=0,cc=0,t0=Date.now();
+const pstate={};
+let as=true, pc=0, hc=0, cc=0, t0=Date.now(), promptsUnread=0, currentTab='live';
 const plist=document.getElementById('plist');
 PHASES.forEach((n)=>{
   const el=document.createElement('div');
@@ -114,6 +170,84 @@ function findP(name){
 function phaseId(name){return 'ph_'+name.replace(/\W+/g,'_');}
 function toggleAS(){as=!as;const b=document.getElementById('ascroll');b.textContent='Auto-scroll '+(as?'ON':'OFF');b.classList.toggle('active',as);}
 setInterval(()=>{const s=Math.floor((Date.now()-t0)/1000);document.getElementById('elapsed').textContent=Math.floor(s/60)+':'+(s%60<10?'0':'')+s%60;},1000);
+
+function switchTab(name){
+  currentTab=name;
+  document.getElementById('tab-pane-live').classList.toggle('active',name==='live');
+  document.getElementById('tab-pane-prompts').classList.toggle('active',name==='prompts');
+  document.getElementById('tab-live').classList.toggle('active',name==='live');
+  document.getElementById('tab-prompts').classList.toggle('active',name==='prompts');
+  if(name==='prompts'){
+    promptsUnread=0;
+    document.getElementById('tab-prompts').classList.remove('has-unread');
+  }
+}
+
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function esc(s){const d=document.createElement('div');d.textContent=String(s||'');return d.innerHTML;}
+
+function renderMd(raw){
+  let s=String(raw||'');
+  const blocks=[];
+  // 1. Fenced code blocks extracted first
+  s=s.replace(/```[\w]*\n?([\s\S]*?)```/g,(_,c)=>{
+    blocks.push('<pre><code>'+escHtml(c.replace(/^\n+|\n+$/g,''))+'</code></pre>');
+    return '\x00B'+(blocks.length-1)+'\x00';
+  });
+  // 2. Inline code
+  s=s.replace(/`([^`\n]+)`/g,(_,c)=>'<code>'+escHtml(c)+'</code>');
+  // 3. Bold
+  s=s.replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>');
+  // 4. Tables
+  const lines=s.split('\n');const out=[];let tbl=[];
+  const flushTbl=()=>{
+    if(!tbl.length)return;
+    let hd=false,h='<table>';
+    tbl.forEach(l=>{
+      if(/^\s*\|[\s|:-]+\|/.test(l)){hd=true;return;}
+      const cs=l.replace(/^\s*\||\|\s*$/g,'').split('|').map(c=>c.trim());
+      const tag=!hd?'th':'td';
+      h+='<tr>'+cs.map(c=>`<${tag}>${c}</${tag}>`).join('')+'</tr>';
+    });
+    out.push(h+'</table>');tbl=[];
+  };
+  lines.forEach(l=>{/^\s*\|/.test(l)?tbl.push(l):(flushTbl(),out.push(l));});
+  flushTbl();s=out.join('\n');
+  // 5. Unordered lists
+  s=s.replace(/((?:^|\n)- [^\n]+)+/g,b=>'<ul>'+b.trim().split('\n').map(l=>'<li>'+l.replace(/^-\s+/,'')+'</li>').join('')+'</ul>');
+  // 6. Bare URLs
+  s=s.replace(/(?<!['"=])(https?:\/\/[^\s<>"]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>');
+  // 7. Paragraphs + line breaks
+  s='<p>'+s.replace(/\n\n+/g,'</p><p>').replace(/\n/g,'<br>')+'</p>';
+  // 8. Restore code blocks
+  blocks.forEach((b,i)=>s=s.replace('\x00B'+i+'\x00',b));
+  return s;
+}
+
+function scroll(){if(as&&currentTab==='live'){const f=document.getElementById('feed');f.scrollTop=f.scrollHeight;}}
+
+function togglePort(row){
+  const d=row.querySelector('.port-detail');if(!d)return;
+  row.classList.toggle('expanded',d.classList.toggle('open'));
+}
+
+function stripRich(s){return String(s||'').replace(/\[\/?\w[\w\s]*\]/g,'').trim();}
+
+function addPromptLog(msg,status){
+  const f=document.getElementById('prompts-feed');
+  const ts=new Date().toLocaleTimeString();
+  const el=document.createElement('div');
+  el.className='prompt-log-entry '+status;
+  el.innerHTML='<div class="pl-ts">'+ts+'</div><div class="pl-msg">'+esc(stripRich(msg))+'</div>'
+    +'<div class="pl-status">'+(status==='waiting'?'&#9650; Waiting for terminal input...':'&#10003; Answered')+'</div>';
+  f.insertBefore(el,f.firstChild);
+}
+
+function resolveLastPromptLog(){
+  const el=document.getElementById('prompts-feed').querySelector('.waiting');
+  if(el){el.classList.replace('waiting','resolved');el.querySelector('.pl-status').textContent='\u2713 Answered';}
+}
+
 const es=new EventSource('/stream');
 es.onmessage=e=>{try{const ev=JSON.parse(e.data);handle(ev.type,ev.data);}catch(ex){}};
 function handle(type,d){
@@ -129,11 +263,21 @@ function handle(type,d){
   }else if(type==='phase_complete'){
     const p=findP(d.phase);if(p)p.el.className='phase-item '+(d.skipped?'skipped':'done');
     const h=document.getElementById(phaseId(d.phase));
-    if(h){h.className='ph-hdr '+(d.skipped?'skip':'done');h.querySelector('.ph-st').textContent=d.skipped?' &#8212; skipped':' &#8212; done';}
+    if(h){h.className='ph-hdr '+(d.skipped?'skip':'done');h.querySelector('.ph-st').textContent=d.skipped?' \u2014 skipped':' \u2014 done';}
   }else if(type==='port_found'){
     pc++;document.getElementById('sp').textContent=pc;
-    const r=document.createElement('div');r.className='port-row';
-    r.innerHTML='<span class="pn">'+esc(d.port)+'/tcp</span><span class="ps">'+esc(d.service)+'</span><span class="pv">'+esc(d.version||'')+'</span>';
+    const r=document.createElement('div');
+    r.className='port-row';
+    r.setAttribute('onclick','togglePort(this)');
+    r.innerHTML=
+      '<span class="pn">'+esc(d.port)+'/tcp</span>'+
+      '<span class="ps">'+esc(d.service)+'</span>'+
+      '<span class="pv">'+esc(d.version||'')+'</span>'+
+      '<div class="port-detail">'+
+        '<b>Port:</b> '+esc(d.port)+'/tcp &nbsp; '+
+        '<b>Service:</b> '+esc(d.service||'unknown')+' &nbsp; '+
+        '<b>Version:</b> '+(d.version?esc(d.version):'<em>not detected</em>')+
+      '</div>';
     feed.appendChild(r);
     const c=document.createElement('span');c.className='pchip';c.textContent=d.port;document.getElementById('pchips').appendChild(c);
     scroll();
@@ -141,24 +285,48 @@ function handle(type,d){
     hc++;document.getElementById('sh').textContent=hc;
   }else if(type==='cmd_run'){
     cc++;document.getElementById('sc').textContent=cc;
+    if(d.description){
+      const ac=document.getElementById('active-cmd');
+      document.getElementById('ac-text').textContent=d.description;
+      ac.style.display='flex';
+      const e2=document.createElement('div');e2.className='cmd-entry';
+      e2.innerHTML='<span class="ce-arrow">&#9654;</span><span>'+esc(d.description)+'</span>';
+      feed.appendChild(e2);scroll();
+    }
   }else if(type==='finding'){
-    const card=document.createElement('div');card.className='card';
-    const auto=feed.querySelectorAll('.card').length<5;
-    card.innerHTML='<div class="card-hdr" onclick="tog(this)"><div class="cbadge"></div><div class="ctitle">'+esc(d.section)+'</div><div class="ctog">'+(auto?'&#9650;':'&#9660;')+'</div></div>'
-      +'<div class="card-body'+(auto?' open':'')+'">'+esc(d.content)+'</div>';
+    const card=document.createElement('div');
+    card.className='card'+(d.null_result?' null-result':'');
+    const auto=!d.null_result && feed.querySelectorAll('.card:not(.null-result)').length<5;
+    card.innerHTML=
+      '<div class="card-hdr" onclick="tog(this)">'+
+        '<div class="cbadge"></div>'+
+        '<div class="ctitle">'+esc(d.section)+(d.null_result?' <em style="font-weight:normal;font-size:10px;opacity:.6">(no findings)</em>':'')+' </div>'+
+        '<div class="ctog">'+(auto?'&#9650;':'&#9660;')+'</div>'+
+      '</div>'+
+      '<div class="card-body'+(auto?' open':'')+'">'+renderMd(d.content)+'</div>';
     feed.appendChild(card);scroll();
   }else if(type==='scan_complete'){
     document.getElementById('sbadge').className='badge done';
     document.getElementById('sbadge').textContent='Complete';
     document.getElementById('rpt-btn').style.display='inline-block';
+    document.getElementById('active-cmd').style.display='none';
     const b=document.getElementById('done-banner');b.style.display='block';
     document.getElementById('done-stats').textContent='Ports: '+(d.ports||0)+'  |  Hosts: '+(d.hosts||0)+'  |  Commands: '+(d.commands||0);
     feed.insertBefore(b,feed.firstChild);scroll();
+  }else if(type==='prompt_waiting'){
+    document.getElementById('pb-msg').textContent=stripRich(d.message||'');
+    document.getElementById('prompt-banner').style.display='flex';
+    addPromptLog(d.message,'waiting');
+    if(currentTab!=='prompts'){
+      promptsUnread++;
+      document.getElementById('tab-prompts').classList.add('has-unread');
+    }
+  }else if(type==='prompt_resolved'){
+    document.getElementById('prompt-banner').style.display='none';
+    resolveLastPromptLog();
   }
 }
 function tog(hdr){const body=hdr.nextElementSibling;body.classList.toggle('open');hdr.querySelector('.ctog').innerHTML=body.classList.contains('open')?'&#9650;':'&#9660;';}
-function esc(s){const d=document.createElement('div');d.textContent=String(s||'');return d.innerHTML;}
-function scroll(){if(as){const f=document.getElementById('feed');f.scrollTop=f.scrollHeight;}}
 </script>
 </body>
 </html>

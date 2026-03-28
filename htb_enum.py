@@ -211,7 +211,7 @@ def run_command(cmd, description="", timeout=None, show_command=True):
             'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         config.commands_run.append(command_entry)
-        emit_event('cmd_run', {})
+        emit_event('cmd_run', {'description': description, 'command': cmd})
 
         # Show what we're running
         if show_command:
@@ -274,6 +274,16 @@ def run_command(cmd, description="", timeout=None, show_command=True):
     except Exception as e:
         console.print(f"[red]✗ Error running command: {e}[/red]")
         return "", str(e), -1
+
+def prompt_user(message):
+    """Wrap console.input() with SSE notifications so the browser shows an alert."""
+    emit_event('prompt_waiting', {'message': message})
+    try:
+        result = console.input(message)
+    finally:
+        emit_event('prompt_resolved', {})
+    return result
+
 
 def save_output(filename, content, command=None):
     """Save command output to file with command header"""
@@ -419,7 +429,7 @@ def get_target_ip():
     console.print("[dim]Supported formats: 10.10.110.1 | 10.10.110.0/24 | 10.10.110.1-254[/dim]\n")
 
     while True:
-        ip = console.input("[bold yellow]Enter target:[/bold yellow] ").strip()
+        ip = prompt_user("[bold yellow]Enter target:[/bold yellow] ").strip()
 
         if validate_target(ip):
             config.target_ip = ip
@@ -436,7 +446,7 @@ def create_output_directory():
 
     # Check if directory exists and handle accordingly
     if os.path.exists(config.output_dir):
-        response = console.input(f"[yellow]Directory {dirname} already exists. Overwrite? (y/n):[/yellow] ").strip().lower()
+        response = prompt_user(f"[yellow]Directory {dirname} already exists. Overwrite? (y/n):[/yellow] ").strip().lower()
         if response != 'y':
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             dirname = f"{dirname}_{timestamp}"
@@ -647,7 +657,7 @@ def update_hosts_file():
     for host in config.discovered_hosts:
         console.print(f"  • {host}")
     
-    response = console.input("\n[bold cyan]Add to /etc/hosts? (y/n):[/bold cyan] ").strip().lower()
+    response = prompt_user("\n[bold cyan]Add to /etc/hosts? (y/n):[/bold cyan] ").strip().lower()
     
     if response == 'y':
         try:
@@ -695,14 +705,14 @@ def enumerate_web_directories(port='80'):
     wordlist = config.wordlists.get('dirs_common')
     if not os.path.exists(wordlist):
         console.print(f"[yellow]Wordlist not found: {wordlist}[/yellow]")
-        wordlist = console.input("Enter custom wordlist path (or press Enter to skip): ").strip()
+        wordlist = prompt_user("Enter custom wordlist path (or press Enter to skip): ").strip()
         if not wordlist or not os.path.exists(wordlist):
             console.print("[yellow]Skipping directory enumeration[/yellow]")
             return
     
     # Ask for scan depth only once across all hosts
     if not config.depth_prompted:
-        depth = console.input(f"\n[bold cyan]Enter recursion depth (1-5) [default: 2]:[/bold cyan] ").strip()
+        depth = prompt_user(f"\n[bold cyan]Enter recursion depth (1-5) [default: 2]:[/bold cyan] ").strip()
         try:
             depth = int(depth) if depth else 2
             depth = max(1, min(5, depth))
@@ -1161,16 +1171,16 @@ def enumerate_active_directory():
     ))
     
     # Ask for credentials
-    has_creds = console.input("\n[bold cyan]Do you have credentials? (y/n):[/bold cyan] ").strip().lower()
+    has_creds = prompt_user("\n[bold cyan]Do you have credentials? (y/n):[/bold cyan] ").strip().lower()
     
     username = None
     password = None
     domain = None
     
     if has_creds == 'y':
-        domain = shell_quote(console.input("[bold yellow]Domain (or press Enter for default):[/bold yellow] ").strip())
-        username = shell_quote(console.input("[bold yellow]Username:[/bold yellow] ").strip())
-        password = shell_quote(console.input("[bold yellow]Password:[/bold yellow] ").strip())
+        domain = shell_quote(prompt_user("[bold yellow]Domain (or press Enter for default):[/bold yellow] ").strip())
+        username = shell_quote(prompt_user("[bold yellow]Username:[/bold yellow] ").strip())
+        password = shell_quote(prompt_user("[bold yellow]Password:[/bold yellow] ").strip())
 
         # Store credentials for reuse across all AD sub-phases
         config.ad_username = username
@@ -1478,7 +1488,7 @@ def enumerate_ad_bloodhound():
         console.print("[dim]Skipping BloodHound collection[/dim]")
         return
     
-    run_bh = console.input("[bold yellow]Run BloodHound collection? (y/n):[/bold yellow] ").strip().lower()
+    run_bh = prompt_user("[bold yellow]Run BloodHound collection? (y/n):[/bold yellow] ").strip().lower()
     if run_bh != 'y':
         return
 
@@ -1816,7 +1826,7 @@ def enumerate_ad_asreproast_noauth():
         domain = '.'.join(domain)
     
     if not domain:
-        domain = console.input("[yellow]Domain name (e.g., htb.local):[/yellow] ").strip()
+        domain = prompt_user("[yellow]Domain name (e.g., htb.local):[/yellow] ").strip()
         if not domain:
             console.print("[dim]Domain required, skipping[/dim]")
             return
@@ -2300,7 +2310,7 @@ def vulnerability_scanning():
     if has_web:
         target = config.discovered_hosts[0] if config.discovered_hosts else config.target_ip
         
-        response = console.input("\n[yellow]Run Nuclei vulnerability scan? This may take a while (y/n):[/yellow] ").strip().lower()
+        response = prompt_user("\n[yellow]Run Nuclei vulnerability scan? This may take a while (y/n):[/yellow] ").strip().lower()
         
         if response == 'y':
             # Create target list
@@ -2520,7 +2530,7 @@ def main():
             for idx, host in enumerate(live_hosts, 1):
                 console.print(f"  [cyan]{idx}[/cyan]: {host}")
 
-            selection = console.input("\n[bold yellow]Select host(s):[/bold yellow] ").strip().lower()
+            selection = prompt_user("\n[bold yellow]Select host(s):[/bold yellow] ").strip().lower()
 
             if selection == 'q':
                 console.print("[yellow]Exiting.[/yellow]")

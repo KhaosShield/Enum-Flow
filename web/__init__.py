@@ -21,6 +21,8 @@ _HERE = Path(__file__).parent   # web/ directory for HTML file lookup
 _config = None
 _sse_queues = []
 _sse_lock = threading.Lock()
+_phase_has_finding = False
+_current_phase_name = ''
 console = Console()
 
 
@@ -32,8 +34,36 @@ def init(config_obj):
 
 def emit_event(event_type, data):
     """Broadcast an SSE event to all connected dashboard clients."""
+    global _phase_has_finding, _current_phase_name
+
     if not _config.dashboard_enabled:
         return
+
+    if event_type == 'phase_start':
+        _phase_has_finding = False
+        _current_phase_name = data.get('phase', '')
+
+    elif event_type == 'finding':
+        if not data.get('null_result', False):
+            _phase_has_finding = True
+
+    elif event_type == 'phase_complete':
+        if not data.get('skipped', False) and not _phase_has_finding:
+            # Auto-inject null-result finding before phase_complete reaches clients
+            _null = json.dumps({'type': 'finding', 'data': {
+                'section': _current_phase_name,
+                'content': 'No findings \u2014 phase completed cleanly.',
+                'null_result': True,
+            }})
+            with _sse_lock:
+                for q in _sse_queues:
+                    try:
+                        q.put_nowait(_null)
+                    except Exception:
+                        pass
+        _phase_has_finding = False
+        _current_phase_name = ''
+
     payload = json.dumps({'type': event_type, 'data': data})
     with _sse_lock:
         dead = []
