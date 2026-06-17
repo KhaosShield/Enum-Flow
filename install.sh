@@ -13,7 +13,7 @@ NC='\033[0m' # No Color
 echo -e "${BLUE}"
 cat << "EOF"
 ╔═══════════════════════════════════════════════════════════╗
-║     HTB Enumeration Tool v1.0rc2 - Installer              ║
+║       HTB Enumeration Tool v1.2 - Installer               ║
 ╚═══════════════════════════════════════════════════════════╝
 EOF
 echo -e "${NC}"
@@ -43,7 +43,7 @@ REQUIRED_TOOLS=(
 )
 
 for tool in "${REQUIRED_TOOLS[@]}"; do
-    if dpkg -l | grep -q "^ii  $tool "; then
+    if dpkg -s "$tool" 2>/dev/null | grep -q "Status: install ok installed"; then
         echo -e "${GREEN}[✓]${NC} $tool already installed"
     else
         echo -e "${YELLOW}[+]${NC} Installing $tool..."
@@ -76,6 +76,7 @@ OPTIONAL_TOOLS=(
     "dnsutils"
     "dnsenum"
     "whatweb"
+    "enum4linux"
     "enum4linux-ng"
     "nikto"
     "wpscan"
@@ -97,7 +98,7 @@ OPTIONAL_TOOLS=(
 )
 
 for tool in "${OPTIONAL_TOOLS[@]}"; do
-    if dpkg -l | grep -q "^ii  $tool "; then
+    if dpkg -s "$tool" 2>/dev/null | grep -q "Status: install ok installed"; then
         echo -e "${GREEN}[✓]${NC} $tool already installed"
     else
         echo -e "${YELLOW}[+]${NC} Installing $tool..."
@@ -117,7 +118,7 @@ fi
 
 # Install Python dependencies
 echo -e "\n${BLUE}[*] Installing Python dependencies...${NC}"
-pip3 install rich bloodhound flask --break-system-packages > /dev/null 2>&1
+pip3 install rich bloodhound-python flask --break-system-packages > /dev/null 2>&1
 echo -e "${GREEN}[✓]${NC} Python dependencies installed (rich, bloodhound-python, flask)"
 
 # Install Kerbrute (Go binary from GitHub)

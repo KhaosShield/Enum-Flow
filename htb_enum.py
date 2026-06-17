@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HTB Enumeration Tool v1.0rc2
+HTB Enumeration Tool v1.2
 Author: @KhaosShield
 Description: Comprehensive enumeration tool for HackTheBox labs and Pro Labs
 """
@@ -36,6 +36,17 @@ except ImportError:
     from rich import box
 
 console = Console()
+
+
+def _make_progress():
+    """Return a standard indeterminate progress bar using the global console."""
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        console=console,
+    )
+
 
 try:
     from flask import Flask, Response
@@ -544,7 +555,7 @@ def banner():
     """Display tool banner"""
     banner_text = """
     ╔═══════════════════════════════════════════════════════════╗
-    ║         HTB Enumeration Tool v1.0                         ║
+    ║         HTB Enumeration Tool v1.2                         ║
     ║         Comprehensive Lab Enumeration Suite               ║
     ╚═══════════════════════════════════════════════════════════╝
     """
@@ -617,8 +628,6 @@ def run_command(cmd, description="", timeout=None, show_command=True):
         if show_command:
             console.print(f"\n[bold cyan]Running:[/bold cyan] [dim]{description}[/dim]")
             console.print(f"[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
-        else:
-            console.print(f"[cyan]→[/cyan] {description}", style="dim")
         
         # Check if skip was already requested
         if config.skip_requested:
@@ -637,7 +646,6 @@ def run_command(cmd, description="", timeout=None, show_command=True):
         )
         
         # Poll process while checking for skip request
-        import time
         start_time = time.time()
         while process.poll() is None:
             # Check for skip request
@@ -761,14 +769,8 @@ def discover_live_hosts():
     console.print(f"\n[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
     console.print("[dim]Discovering live hosts in network range. [bold yellow]Press Ctrl+Z to skip.[/bold yellow][/dim]\n")
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        console=console
-    ) as progress:
-        task = progress.add_task("[cyan]Scanning for live hosts...", total=100)
+    with _make_progress() as progress:
+        task = progress.add_task("[cyan]Scanning for live hosts...", total=None)
 
         stdout, stderr, code = run_command(cmd, "Host discovery", timeout=300, show_command=False)
         progress.update(task, completed=100)
@@ -776,7 +778,11 @@ def discover_live_hosts():
     save_output("host_discovery.txt", stdout, command=cmd)
 
     # Parse discovered hosts
-    live_hosts = re.findall(r'Nmap scan report for (\d+\.\d+\.\d+\.\d+)', stdout)
+    live_hosts = []
+    for _line in stdout.splitlines():
+        _m = re.search(r'Nmap scan report for (?:[^\d(]+\()?(\d{1,3}(?:\.\d{1,3}){3})', _line)
+        if _m:
+            live_hosts.append(_m.group(1))
 
     if live_hosts:
         # Store in config for later use
@@ -892,20 +898,10 @@ def nmap_basic_scan():
     if config.stealth_mode:
         cmd = f"nmap -p- -T2 -Pn {config.target_ip}"
     
-    # Run the scan
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        console=console
-    ) as progress:
-        task = progress.add_task("[cyan]Scanning all 65535 ports...", total=100)
-        
-        # Show the command
-        console.print(f"\n[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
-        console.print("[dim]This may take 5-10 minutes. [bold yellow]Press Ctrl+Z to skip this phase.[/bold yellow][/dim]\n")
-        
+    console.print(f"\n[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
+    console.print("[dim]This may take 5-10 minutes. [bold yellow]Press Ctrl+Z to skip this phase.[/bold yellow][/dim]\n")
+    with _make_progress() as progress:
+        task = progress.add_task("[cyan]Scanning all 65535 ports...", total=None)
         stdout, stderr, code = run_command(cmd, "Initial port discovery", timeout=600, show_command=False)
         progress.update(task, completed=100)
     
@@ -917,11 +913,12 @@ def nmap_basic_scan():
     if ports:
         config.discovered_ports = {port: {} for port in ports}
         
-        table = Table(title="Discovered Open Ports", box=box.ROUNDED)
-        table.add_column("Port", style="cyan", justify="center")
-        table.add_column("Count", style="green", justify="center")
-        
-        table.add_row(", ".join(ports), str(len(ports)))
+        table = Table(title=f"Discovered Open Ports ({len(ports)} total)", box=box.ROUNDED)
+        table.add_column("Port", style="cyan", justify="center", width=8)
+        table.add_column("Status", style="green", justify="center", width=8)
+
+        for p in sorted(ports, key=lambda x: int(x)):
+            table.add_row(p, "open")
         console.print(table)
         
         add_to_report("Phase 1: Initial Port Discovery", f"""
@@ -958,14 +955,8 @@ def nmap_detailed_scan(ports):
     console.print(f"\n[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
     console.print("[dim]Running detailed service scan. [bold yellow]Press Ctrl+Z to skip this phase.[/bold yellow][/dim]\n")
     
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        console=console
-    ) as progress:
-        task = progress.add_task("[cyan]Scanning services on discovered ports...", total=100)
+    with _make_progress() as progress:
+        task = progress.add_task("[cyan]Scanning services on discovered ports...", total=None)
         
         stdout, stderr, code = run_command(cmd, "Detailed port enumeration", timeout=900, show_command=False)
         progress.update(task, completed=100)
@@ -1125,55 +1116,70 @@ def enumerate_web_directories(port='80'):
     
     console.print(f"[cyan]Target URL:[/cyan] {base_url}\n")
     
-    # Gobuster command
-    output_file = f"{config.output_dir}/gobuster_port{port}.txt"
-    # Remove -q flag to show progress, keep output to file
-    cmd = f"gobuster dir -u {base_url} -w {wordlist} -t {config.threads} -o {output_file} -r --no-error"
-    
-    if depth > 1:
-        cmd += f" -d {depth}"
-    
-    # Add common extensions
-    cmd += " -x php,html,txt,asp,aspx,jsp"
-    
+    # Prefer feroxbuster (supports real recursion) over gobuster
+    if tool_exists('feroxbuster'):
+        output_file = f"{config.output_dir}/feroxbuster_port{port}.txt"
+        cmd = (f"feroxbuster -u {base_url} -w {wordlist} -t {config.threads}"
+               f" -o {output_file} --depth {depth} --no-state -q"
+               f" -x php,html,txt,asp,aspx,jsp")
+        tool_name = "feroxbuster"
+        use_feroxbuster = True
+    else:
+        output_file = f"{config.output_dir}/gobuster_port{port}.txt"
+        cmd = (f"gobuster dir -u {base_url} -w {wordlist} -t {config.threads}"
+               f" -o {output_file} -r --no-error"
+               f" -x php,html,txt,asp,aspx,jsp")
+        tool_name = "gobuster"
+        use_feroxbuster = False
+        if depth > 1:
+            console.print("[yellow]ℹ gobuster doesn't support recursive scanning — install feroxbuster for depth > 1[/yellow]")
+
     console.print(f"\n[bold]Command:[/bold] [yellow]{cmd}[/yellow]")
     console.print(f"[dim]Scanning {wordlist}. [bold yellow]Press Ctrl+Z to skip this phase.[/bold yellow][/dim]\n")
-    
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        console=console
-    ) as progress:
-        task = progress.add_task(f"[cyan]Scanning directories (depth: {depth})...", total=100)
-        
-        stdout, stderr, code = run_command(cmd, f"Gobuster directory scan", timeout=1800, show_command=False)
+
+    with _make_progress() as progress:
+        task = progress.add_task(f"[cyan]Scanning directories with {tool_name} (depth: {depth})...", total=None)
+        stdout, stderr, code = run_command(cmd, f"{tool_name} directory scan", timeout=1800, show_command=False)
         progress.update(task, completed=100)
-    
-    # Parse and display results
+
+    # Parse results — handle both feroxbuster and gobuster output formats
     if os.path.exists(output_file):
         with open(output_file, 'r') as f:
             results = f.read()
-        
-        # Extract found directories
-        found_dirs = re.findall(r'(/\S+)\s+\(Status: (\d+)\)', results)
-        
+
+        found_dirs = []
+        for _line in results.splitlines():
+            _line = _line.strip()
+            if not _line or _line.startswith('#'):
+                continue
+            if use_feroxbuster:
+                # feroxbuster: "200 GET ... http://host/path [=> redirect]"
+                _m = re.match(r'(\d{3})\s+\w+\s+\S+\s+\S+\s+\S+\s+(https?://\S+?)(?:\s+=>.*)?$', _line)
+                if _m and _m.group(1) in ('200', '301', '302', '403'):
+                    _path = re.sub(r'^https?://[^/]+', '', _m.group(2).rstrip('/')) or '/'
+                    found_dirs.append((_path, _m.group(1)))
+            else:
+                # gobuster: "/path (Status: 200) [Size: ...]"
+                _m = re.search(r'(/\S+)\s+\(Status:\s*(\d+)\)', _line)
+                if _m:
+                    found_dirs.append((_m.group(1), _m.group(2)))
+
         if found_dirs:
             table = Table(title=f"Discovered Directories (Port {port})", box=box.ROUNDED)
             table.add_column("Path", style="cyan")
             table.add_column("Status", style="green", justify="center")
-            
-            for path, status in found_dirs[:50]:  # Show first 50
+
+            for path, status in found_dirs[:50]:
                 table.add_row(path, status)
-            
+
             console.print(table)
-            
+
             if len(found_dirs) > 50:
                 console.print(f"[dim]... and {len(found_dirs) - 50} more (see output file)[/dim]")
-            
+
             add_to_report(f"Web Directory Enumeration (Port {port})", f"""
 **Base URL:** {base_url}
+**Tool:** {tool_name}
 **Recursion Depth:** {depth}
 **Discovered Paths:** {len(found_dirs)}
 
@@ -1256,25 +1262,21 @@ def enumerate_vhosts_ffuf(base_domain, port, wordlist):
     protocol = 'https' if port == '443' else 'http'
     base_url = f"{protocol}://{config.target_ip}:{port}" if port not in ['80', '443'] else f"{protocol}://{config.target_ip}"
     
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console
-    ) as progress:
+    with _make_progress() as progress:
         task = progress.add_task("[cyan]Enumerating VHOSTs with ffuf...", total=None)
         
         output_file = f"{config.output_dir}/vhosts_ffuf.txt"
         cmd = f"ffuf -w {wordlist} -u {base_url} -H 'Host: FUZZ.{base_domain}' -mc 200,301,302,403 -t {config.threads} -o {output_file} -of csv -s"
         
-        stdout, stderr, code = run_command(cmd, "VHOST enumeration", timeout=600)
+        stdout, stderr, code = run_command(cmd, "VHOST enumeration", timeout=600, show_command=False)
         progress.update(task, completed=100)
-    
+
     # Parse results
     if os.path.exists(output_file):
         try:
             with open(output_file, 'r') as f:
                 lines = f.readlines()
-            
+
             if len(lines) > 1:  # Has results beyond header
                 found_vhosts = []
                 for line in lines[1:]:  # Skip header
@@ -1300,14 +1302,8 @@ def enumerate_vhosts_gobuster(base_domain, port, wordlist):
     protocol = 'https' if port == '443' else 'http'
     base_url = f"{protocol}://{config.target_ip}:{port}" if port not in ['80', '443'] else f"{protocol}://{config.target_ip}"
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        console=console
-    ) as progress:
-        task = progress.add_task("[cyan]Enumerating VHOSTs with gobuster...", total=100)
+    with _make_progress() as progress:
+        task = progress.add_task("[cyan]Enumerating VHOSTs with gobuster...", total=None)
 
         output_file = f"{config.output_dir}/vhosts_gobuster.txt"
         cmd = f"gobuster vhost -u {base_url} -w {wordlist} --domain {base_domain} -t {config.threads} -o {output_file} -q"
@@ -1470,7 +1466,6 @@ def enumerate_smb():
             stderr=None
         )
 
-        import time
         start_time = time.time()
         timed_out = False
         while process.poll() is None:
@@ -1568,11 +1563,10 @@ def enumerate_active_directory():
     domain = None
     
     if has_creds == 'y':
-        domain = shell_quote(console.input("[bold yellow]Domain (or press Enter for default):[/bold yellow] ").strip())
-        username = shell_quote(console.input("[bold yellow]Username:[/bold yellow] ").strip())
-        password = shell_quote(console.input("[bold yellow]Password:[/bold yellow] ").strip())
+        domain = console.input("[bold yellow]Domain (or press Enter for default):[/bold yellow] ").strip()
+        username = console.input("[bold yellow]Username:[/bold yellow] ").strip()
+        password = console.input("[bold yellow]Password:[/bold yellow] ").strip()
 
-        # Store credentials for reuse across all AD sub-phases
         config.ad_username = username
         config.ad_password = password
         config.ad_domain = domain
@@ -1593,14 +1587,8 @@ def enumerate_active_directory():
 
         # Basic SMB check
         cmd = f"netexec smb {config.target_ip}"
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            console=console
-        ) as progress:
-            task = progress.add_task("[cyan]Discovering SMB services...", total=100)
+        with _make_progress() as progress:
+            task = progress.add_task("[cyan]Discovering SMB services...", total=None)
             stdout, stderr, code = run_command(cmd, "NetExec SMB discovery", show_command=False)
             progress.update(task, completed=100)
 
@@ -1616,18 +1604,12 @@ def enumerate_active_directory():
 
         if username and password:
             # Authenticated enumeration
-            auth_cmd = f"netexec smb {config.target_ip} -u '{username}' -p '{password}'"
+            auth_cmd = f"netexec smb {config.target_ip} -u '{shell_quote(username)}' -p '{shell_quote(password)}'"
             if domain:
-                auth_cmd += f" -d '{domain}'"
+                auth_cmd += f" -d '{shell_quote(domain)}'"
 
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                console=console
-            ) as progress:
-                task = progress.add_task("[cyan]Testing credentials via SMB...", total=100)
+            with _make_progress() as progress:
+                task = progress.add_task("[cyan]Testing credentials via SMB...", total=None)
                 stdout, stderr, code = run_command(auth_cmd, "NetExec credential test", show_command=False)
                 progress.update(task, completed=100)
 
@@ -1637,17 +1619,11 @@ def enumerate_active_directory():
             # LDAP fallback if SMB auth failed (useful for service accounts like svc-alfresco)
             if not creds_valid and ('389' in config.discovered_ports or '636' in config.discovered_ports):
                 console.print("[yellow]SMB auth failed, trying LDAP fallback...[/yellow]")
-                ldap_auth_cmd = f"netexec ldap {config.target_ip} -u '{username}' -p '{password}'"
+                ldap_auth_cmd = f"netexec ldap {config.target_ip} -u '{shell_quote(username)}' -p '{shell_quote(password)}'"
                 if domain:
-                    ldap_auth_cmd += f" -d '{domain}'"
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    BarColumn(),
-                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                    console=console
-                ) as progress:
-                    task = progress.add_task("[cyan]Testing credentials via LDAP...", total=100)
+                    ldap_auth_cmd += f" -d '{shell_quote(domain)}'"
+                with _make_progress() as progress:
+                    task = progress.add_task("[cyan]Testing credentials via LDAP...", total=None)
                     stdout_ldap, stderr_ldap, code_ldap = run_command(ldap_auth_cmd, "NetExec LDAP credential test", show_command=False)
                     progress.update(task, completed=100)
                 if "[+]" in stdout_ldap:
@@ -1665,42 +1641,24 @@ def enumerate_active_directory():
                 # Enumerate shares (SMB only - not supported via LDAP)
                 if not ldap_only:
                     cmd = f"{enum_cmd} --shares"
-                    with Progress(
-                        SpinnerColumn(),
-                        TextColumn("[progress.description]{task.description}"),
-                        BarColumn(),
-                        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                        console=console
-                    ) as progress:
-                        task = progress.add_task("[cyan]Enumerating SMB shares...", total=100)
+                    with _make_progress() as progress:
+                        task = progress.add_task("[cyan]Enumerating SMB shares...", total=None)
                         stdout, stderr, code = run_command(cmd, "Enumerating SMB shares", show_command=False)
                         progress.update(task, completed=100)
                     save_output("netexec_shares.txt", stdout)
 
                 # Enumerate users
                 cmd = f"{enum_cmd} --users"
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    BarColumn(),
-                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                    console=console
-                ) as progress:
-                    task = progress.add_task("[cyan]Enumerating domain users...", total=100)
+                with _make_progress() as progress:
+                    task = progress.add_task("[cyan]Enumerating domain users...", total=None)
                     stdout, stderr, code = run_command(cmd, "Enumerating users", show_command=False)
                     progress.update(task, completed=100)
                 save_output("netexec_users.txt", stdout)
 
                 # Enumerate groups
                 cmd = f"{enum_cmd} --groups"
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    BarColumn(),
-                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                    console=console
-                ) as progress:
-                    task = progress.add_task("[cyan]Enumerating domain groups...", total=100)
+                with _make_progress() as progress:
+                    task = progress.add_task("[cyan]Enumerating domain groups...", total=None)
                     stdout, stderr, code = run_command(cmd, "Enumerating groups", show_command=False)
                     progress.update(task, completed=100)
                 save_output("netexec_groups.txt", stdout)
@@ -1708,14 +1666,8 @@ def enumerate_active_directory():
                 # Password policy (SMB only - not supported via LDAP)
                 if not ldap_only:
                     cmd = f"{enum_cmd} --pass-pol"
-                    with Progress(
-                        SpinnerColumn(),
-                        TextColumn("[progress.description]{task.description}"),
-                        BarColumn(),
-                        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                        console=console
-                    ) as progress:
-                        task = progress.add_task("[cyan]Getting password policy...", total=100)
+                    with _make_progress() as progress:
+                        task = progress.add_task("[cyan]Getting password policy...", total=None)
                         stdout, stderr, code = run_command(cmd, "Getting password policy", show_command=False)
                         progress.update(task, completed=100)
                     save_output("netexec_passpol.txt", stdout)
@@ -1727,28 +1679,16 @@ def enumerate_active_directory():
 
             # Check for null sessions
             cmd = f"netexec smb {config.target_ip} -u '' -p ''"
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                console=console
-            ) as progress:
-                task = progress.add_task("[cyan]Checking null sessions...", total=100)
+            with _make_progress() as progress:
+                task = progress.add_task("[cyan]Checking null sessions...", total=None)
                 stdout, stderr, code = run_command(cmd, "Null session check", show_command=False)
                 progress.update(task, completed=100)
             save_output("netexec_null_session.txt", stdout)
 
             # Guest access
             cmd = f"netexec smb {config.target_ip} -u 'guest' -p ''"
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                console=console
-            ) as progress:
-                task = progress.add_task("[cyan]Checking guest access...", total=100)
+            with _make_progress() as progress:
+                task = progress.add_task("[cyan]Checking guest access...", total=None)
                 stdout, stderr, code = run_command(cmd, "Guest session check", show_command=False)
                 progress.update(task, completed=100)
             save_output("netexec_guest_session.txt", stdout)
@@ -1760,14 +1700,8 @@ def enumerate_active_directory():
 
         # Anonymous bind check
         cmd = f"ldapsearch -x -H ldap://{config.target_ip} -s base namingcontexts"
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            console=console
-        ) as progress:
-            task = progress.add_task("[cyan]Checking anonymous LDAP bind...", total=100)
+        with _make_progress() as progress:
+            task = progress.add_task("[cyan]Checking anonymous LDAP bind...", total=None)
             stdout, stderr, code = run_command(cmd, "LDAP anonymous bind", show_command=False)
             progress.update(task, completed=100)
 
@@ -1784,14 +1718,8 @@ def enumerate_active_directory():
 
                     # Dump LDAP with naming context (limited to 1000 entries, 30s server timeout)
                     cmd = f"ldapsearch -x -H ldap://{config.target_ip} -b '{ctx}' -z 1000 -l 30"
-                    with Progress(
-                        SpinnerColumn(),
-                        TextColumn("[progress.description]{task.description}"),
-                        BarColumn(),
-                        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                        console=console
-                    ) as progress:
-                        task = progress.add_task(f"[cyan]Dumping LDAP: {ctx}...", total=100)
+                    with _make_progress() as progress:
+                        task = progress.add_task(f"[cyan]Dumping LDAP: {ctx}...", total=None)
                         stdout_dump, stderr, code = run_command(cmd, f"LDAP dump: {ctx}", timeout=120, show_command=False)
                         progress.update(task, completed=100)
                     if stdout_dump:
@@ -1812,14 +1740,8 @@ def enumerate_active_directory():
             if os.path.exists(userlist):
                 domain_name = domain if domain else "htb.local"
                 cmd = f"kerbrute userenum --dc {config.target_ip} -d {domain_name} {userlist}"
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    BarColumn(),
-                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                    console=console
-                ) as progress:
-                    task = progress.add_task("[cyan]Enumerating users with kerbrute...", total=100)
+                with _make_progress() as progress:
+                    task = progress.add_task("[cyan]Enumerating users with kerbrute...", total=None)
                     stdout, stderr, code = run_command(cmd, "Kerbrute user enumeration", timeout=300, show_command=False)
                     progress.update(task, completed=100)
                 save_output("kerbrute_users.txt", stdout)
@@ -1827,18 +1749,12 @@ def enumerate_active_directory():
         # AS-REP Roasting with NetExec
         if username:
             asrep_file = os.path.join(config.output_dir, "asrep_hashes.txt")
-            cmd = f"netexec ldap {config.target_ip} -u '{username}' -p '{password}' --asreproast '{asrep_file}'"
+            cmd = f"netexec ldap {config.target_ip} -u '{shell_quote(username)}' -p '{shell_quote(password)}' --asreproast '{asrep_file}'"
             if domain:
-                cmd += f" -d '{domain}'"
+                cmd += f" -d '{shell_quote(domain)}'"
 
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                console=console
-            ) as progress:
-                task = progress.add_task("[cyan]Attempting AS-REP roasting...", total=100)
+            with _make_progress() as progress:
+                task = progress.add_task("[cyan]Attempting AS-REP roasting...", total=None)
                 stdout, stderr, code = run_command(cmd, "AS-REP roasting", show_command=False)
                 progress.update(task, completed=100)
 
@@ -1893,16 +1809,10 @@ def enumerate_ad_bloodhound():
     console.print(f"\n[bold]Command:[/bold] [yellow]bloodhound-python -d {domain} -u {username} -p [REDACTED] -dc {config.target_ip} -c All --zip[/yellow]")
     console.print("[dim]Collecting AD data. [bold yellow]Press Ctrl+Z to skip this phase.[/bold yellow][/dim]\n")
     
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        console=console
-    ) as progress:
-        task = progress.add_task("[cyan]Collecting AD objects...", total=100)
+    with _make_progress() as progress:
+        task = progress.add_task("[cyan]Collecting AD objects...", total=None)
         
-        cmd = f"bloodhound-python -d {domain} -u {username} -p '{password}' -dc {config.target_ip} -c All --zip"
+        cmd = f"bloodhound-python -d {shell_quote(domain)} -u {shell_quote(username)} -p '{shell_quote(password)}' -dc {config.target_ip} -c All --zip"
         stdout, stderr, code = run_command(cmd, "BloodHound collection", timeout=600, show_command=False)
         progress.update(task, completed=100)
     
@@ -1949,7 +1859,7 @@ def enumerate_ad_kerberoasting():
         console.print("[cyan]Attempting Kerberoasting with NetExec...[/cyan]")
         
         kerb_file = os.path.join(config.output_dir, "kerberoast_hashes.txt")
-        cmd = f"netexec ldap {config.target_ip} -u '{username}' -p '{password}' -d '{domain}' --kerberoasting '{kerb_file}'"
+        cmd = f"netexec ldap {config.target_ip} -u '{shell_quote(username)}' -p '{shell_quote(password)}' -d '{shell_quote(domain)}' --kerberoasting '{kerb_file}'"
         stdout, stderr, code = run_command(cmd, "NetExec Kerberoasting", timeout=300)
 
         if os.path.exists(kerb_file):
@@ -1977,7 +1887,7 @@ def enumerate_ad_kerberoasting():
     if not kerberoast_found and tool_exists('impacket-GetUserSPNs'):
         console.print("[cyan]Trying Impacket GetUserSPNs...[/cyan]")
         
-        cmd = f"impacket-GetUserSPNs {domain}/{username}:'{password}' -dc-ip {config.target_ip} -request"
+        cmd = f"impacket-GetUserSPNs {shell_quote(domain)}/{shell_quote(username)}:'{shell_quote(password)}' -dc-ip {config.target_ip} -request"
         stdout, stderr, code = run_command(cmd, "Impacket Kerberoasting", timeout=300)
         
         if "$krb5tgs$" in stdout:
@@ -1990,23 +1900,15 @@ def enumerate_ad_kerberoasting():
 
 def test_credentials_everywhere():
     """Test credentials against all discovered services"""
-    if not config.credentials:
+    if not (config.ad_username and config.ad_password):
         return
-    
+
     console.print("\n[bold cyan]═══ Credential Validation ═══[/bold cyan]")
-    
-    # Parse credentials
-    if '/' in config.credentials:
-        domain_user, password = config.credentials.rsplit(':', 1)
-        if '/' in domain_user:
-            domain, username = domain_user.split('/', 1)
-        else:
-            domain = None
-            username = domain_user
-    else:
-        username, password = config.credentials.rsplit(':', 1)
-        domain = None
-    
+
+    username = config.ad_username
+    password = config.ad_password
+    domain = config.ad_domain
+
     console.print(f"[yellow]Testing: {domain+'/' if domain else ''}{username}[/yellow]\n")
     
     results = {}
@@ -2014,9 +1916,9 @@ def test_credentials_everywhere():
     # Test SMB
     if ('445' in config.discovered_ports or '139' in config.discovered_ports) and tool_exists('netexec'):
         console.print("[cyan]→ Testing SMB...[/cyan]")
-        cmd = f"netexec smb {config.target_ip} -u '{username}' -p '{password}'"
+        cmd = f"netexec smb {config.target_ip} -u '{shell_quote(username)}' -p '{shell_quote(password)}'"
         if domain:
-            cmd += f" -d '{domain}'"
+            cmd += f" -d '{shell_quote(domain)}'"
         stdout, stderr, code = run_command(cmd, "SMB credential test", show_command=False)
         
         is_admin = "Pwn3d!" in stdout
@@ -2026,9 +1928,9 @@ def test_credentials_everywhere():
     # Test WinRM
     if ('5985' in config.discovered_ports or '5986' in config.discovered_ports) and tool_exists('netexec'):
         console.print("[cyan]→ Testing WinRM...[/cyan]")
-        cmd = f"netexec winrm {config.target_ip} -u '{username}' -p '{password}'"
+        cmd = f"netexec winrm {config.target_ip} -u '{shell_quote(username)}' -p '{shell_quote(password)}'"
         if domain:
-            cmd += f" -d '{domain}'"
+            cmd += f" -d '{shell_quote(domain)}'"
         stdout, stderr, code = run_command(cmd, "WinRM credential test", show_command=False)
         
         is_admin = "Pwn3d!" in stdout
@@ -2038,9 +1940,9 @@ def test_credentials_everywhere():
     # Test RDP
     if '3389' in config.discovered_ports and tool_exists('netexec'):
         console.print("[cyan]→ Testing RDP...[/cyan]")
-        cmd = f"netexec rdp {config.target_ip} -u '{username}' -p '{password}'"
+        cmd = f"netexec rdp {config.target_ip} -u '{shell_quote(username)}' -p '{shell_quote(password)}'"
         if domain:
-            cmd += f" -d '{domain}'"
+            cmd += f" -d '{shell_quote(domain)}'"
         stdout, stderr, code = run_command(cmd, "RDP credential test", show_command=False)
         is_valid = "[+]" in stdout or "Authentication successful" in stdout
         results['RDP'] = 'Valid' if is_valid else 'Invalid'
@@ -2048,9 +1950,9 @@ def test_credentials_everywhere():
     # Test MSSQL
     if '1433' in config.discovered_ports and tool_exists('netexec'):
         console.print("[cyan]→ Testing MSSQL...[/cyan]")
-        cmd = f"netexec mssql {config.target_ip} -u '{username}' -p '{password}'"
+        cmd = f"netexec mssql {config.target_ip} -u '{shell_quote(username)}' -p '{shell_quote(password)}'"
         if domain:
-            cmd += f" -d '{domain}'"
+            cmd += f" -d '{shell_quote(domain)}'"
         stdout, stderr, code = run_command(cmd, "MSSQL credential test", show_command=False)
         
         is_admin = "Pwn3d!" in stdout
@@ -2060,7 +1962,7 @@ def test_credentials_everywhere():
     # Test SSH (if domain machine has SSH)
     if '22' in config.discovered_ports:
         console.print("[cyan]→ Testing SSH...[/cyan]")
-        cmd = f"sshpass -p '{password}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 {username}@{config.target_ip} 'echo SUCCESS' 2>/dev/null"
+        cmd = f"sshpass -p '{shell_quote(password)}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 {shell_quote(username)}@{config.target_ip} 'echo SUCCESS' 2>/dev/null"
         stdout, stderr, code = run_command(cmd, "SSH credential test", show_command=False)
         results['SSH'] = 'Valid' if 'SUCCESS' in stdout else 'Invalid'
     
@@ -2091,20 +1993,20 @@ def test_credentials_everywhere():
 
         if 'Admin' in results.get('SMB', ''):
             rec_lines.append(f"[bold red]CRITICAL - SMB Admin Access (Pwn3d!)[/bold red]")
-            rec_lines.append(f"  [bold yellow]impacket-psexec {domain+'/' if domain else ''}{username}:'{password}'@{config.target_ip}[/bold yellow]")
-            rec_lines.append(f"  [bold yellow]impacket-secretsdump {domain+'/' if domain else ''}{username}:'{password}'@{config.target_ip}[/bold yellow]")
+            rec_lines.append(f"  [bold yellow]impacket-psexec {domain+'/' if domain else ''}{shell_quote(username)}:'{shell_quote(password)}'@{config.target_ip}[/bold yellow]")
+            rec_lines.append(f"  [bold yellow]impacket-secretsdump {domain+'/' if domain else ''}{shell_quote(username)}:'{shell_quote(password)}'@{config.target_ip}[/bold yellow]")
             rec_lines.append("")
 
         if 'Admin' in results.get('WinRM', '') or 'Valid' in results.get('WinRM', ''):
             winrm_label = "[bold red]CRITICAL - WinRM Admin Access[/bold red]" if 'Admin' in results.get('WinRM', '') else "[bold green]WinRM Access[/bold green]"
             rec_lines.append(winrm_label)
-            rec_lines.append(f"  [bold yellow]evil-winrm -i {config.target_ip} -u {username} -p '{password}'" + (f" -d {domain}" if domain else "") + "[/bold yellow]")
+            rec_lines.append(f"  [bold yellow]evil-winrm -i {config.target_ip} -u {shell_quote(username)} -p '{shell_quote(password)}'" + (f" -d {shell_quote(domain)}" if domain else "") + "[/bold yellow]")
             rec_lines.append("")
 
         if 'Admin' in results.get('MSSQL', '') or 'Valid' in results.get('MSSQL', ''):
             mssql_label = "[bold red]CRITICAL - MSSQL Admin Access[/bold red]" if 'Admin' in results.get('MSSQL', '') else "[bold green]MSSQL Access[/bold green]"
             rec_lines.append(mssql_label)
-            rec_lines.append(f"  [bold yellow]impacket-mssqlclient {domain+'/' if domain else ''}{username}:'{password}'@{config.target_ip}[/bold yellow]")
+            rec_lines.append(f"  [bold yellow]impacket-mssqlclient {domain+'/' if domain else ''}{shell_quote(username)}:'{shell_quote(password)}'@{config.target_ip}[/bold yellow]")
             rec_lines.append("")
 
         if 'Valid' in results.get('SSH', ''):
@@ -2114,7 +2016,7 @@ def test_credentials_everywhere():
 
         if 'Valid' in results.get('RDP', ''):
             rec_lines.append(f"[bold green]RDP Access[/bold green]")
-            rec_lines.append(f"  [bold yellow]xfreerdp /v:{config.target_ip} /u:{username} /p:'{password}'" + (f" /d:{domain}" if domain else "") + "[/bold yellow]")
+            rec_lines.append(f"  [bold yellow]xfreerdp /v:{config.target_ip} /u:{shell_quote(username)} /p:'{shell_quote(password)}'" + (f" /d:{shell_quote(domain)}" if domain else "") + "[/bold yellow]")
             rec_lines.append("")
 
         border = "red" if admin_access else "green"
@@ -2146,9 +2048,9 @@ def enumerate_ad_shares_deep():
     console.print("[cyan]Searching shares for interesting files...[/cyan]")
     console.print("[dim]Looking for: passwords, configs, keys, scripts[/dim]\n")
     
-    auth = f"-u '{username}' -p '{password}'"
+    auth = f"-u '{shell_quote(username)}' -p '{shell_quote(password)}'"
     if domain:
-        auth += f" -d '{domain}'"
+        auth += f" -d '{shell_quote(domain)}'"
     
     # Use spider_plus module to search
     patterns = ["password", "secret", "credential", "key", ".xml", ".config", ".ini"]
@@ -2187,7 +2089,7 @@ def enumerate_ad_gpp():
 
     console.print("[cyan]Checking SYSVOL for GPP passwords...[/cyan]")
     
-    cmd = f"netexec smb {config.target_ip} -u '{username}' -p '{password}' -d '{domain}' -M gpp_password"
+    cmd = f"netexec smb {config.target_ip} -u '{shell_quote(username)}' -p '{shell_quote(password)}' -d '{shell_quote(domain)}' -M gpp_password"
     stdout, stderr, code = run_command(cmd, "GPP Password search", timeout=120)
     
     if "cpassword" in stdout.lower() or "password" in stdout.lower():
@@ -2409,17 +2311,13 @@ def nikto_scan():
             protocol = 'https' if port in ['443', '8443'] else 'http'
             target = config.discovered_hosts[0] if config.discovered_hosts else config.target_ip
             
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console
-            ) as progress:
+            with _make_progress() as progress:
                 task = progress.add_task(f"[cyan]Nikto scan on port {port}...", total=None)
                 
                 output_file = f"{config.output_dir}/nikto_port{port}.txt"
                 cmd = f"nikto -h {protocol}://{target}:{port} -output {output_file} -Format txt"
                 
-                stdout, stderr, code = run_command(cmd, f"Nikto scan: {protocol}://{target}:{port}", timeout=600)
+                stdout, stderr, code = run_command(cmd, f"Nikto scan: {protocol}://{target}:{port}", timeout=600, show_command=False)
                 progress.update(task, completed=100)
             
             if os.path.exists(output_file):
@@ -2457,13 +2355,9 @@ def cms_detection():
                     output_file = f"{config.output_dir}/wpscan_port{port}.txt"
                     cmd = f"wpscan --url {url} --enumerate vp,vt,u --plugins-detection aggressive -o {output_file}"
                     
-                    with Progress(
-                        SpinnerColumn(),
-                        TextColumn("[progress.description]{task.description}"),
-                        console=console
-                    ) as progress:
+                    with _make_progress() as progress:
                         task = progress.add_task("[cyan]WPScan enumeration...", total=None)
-                        stdout, stderr, code = run_command(cmd, "WPScan", timeout=900)
+                        stdout, stderr, code = run_command(cmd, "WPScan", timeout=900, show_command=False)
                         progress.update(task, completed=100)
                     
                     if os.path.exists(output_file):
@@ -2517,13 +2411,9 @@ def ssl_vulnerability_scan():
                 testssl_cmd = 'testssl.sh' if tool_exists('testssl.sh') else 'testssl'
                 cmd = f"{testssl_cmd} --quiet --jsonfile {output_file}.json {target}:{port} > {output_file}"
                 
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    console=console
-                ) as progress:
+                with _make_progress() as progress:
                     task = progress.add_task(f"[cyan]SSL/TLS scan on port {port}...", total=None)
-                    stdout, stderr, code = run_command(cmd, f"TestSSL scan: {target}:{port}", timeout=300)
+                    stdout, stderr, code = run_command(cmd, f"TestSSL scan: {target}:{port}", timeout=300, show_command=False)
                     progress.update(task, completed=100)
                 
                 if os.path.exists(output_file):
@@ -2712,17 +2602,13 @@ def vulnerability_scanning():
                         url = f"{protocol}://{target}:{port}" if port not in ['80', '443'] else f"{protocol}://{target}"
                         f.write(f"{url}\n")
             
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console
-            ) as progress:
+            with _make_progress() as progress:
                 task = progress.add_task("[cyan]Running Nuclei...", total=None)
                 
                 output_file = f"{config.output_dir}/nuclei_results.txt"
                 cmd = f"nuclei -l {target_file} -severity critical,high,medium -o {output_file}"
                 
-                stdout, stderr, code = run_command(cmd, "Nuclei vulnerability scan", timeout=1800)
+                stdout, stderr, code = run_command(cmd, "Nuclei vulnerability scan", timeout=1800, show_command=False)
                 progress.update(task, completed=100)
             
             if os.path.exists(output_file):
@@ -2733,29 +2619,6 @@ def vulnerability_scanning():
                         console.print(f"[yellow]Check: {output_file}[/yellow]")
                     else:
                         console.print("[yellow]No vulnerabilities found[/yellow]")
-
-def impacket_enumeration():
-    """Use Impacket tools for additional enumeration"""
-    if not ('445' in config.discovered_ports or '88' in config.discovered_ports):
-        return
-    
-    console.print("\n[bold cyan]Impacket Enumeration...[/bold cyan]")
-    
-    # GetNPUsers for AS-REP roasting without credentials
-    if '88' in config.discovered_ports and tool_exists('impacket-GetNPUsers'):
-        console.print("[cyan]Attempting AS-REP roasting (no auth)...[/cyan]")
-        
-        domain = config.discovered_hosts[0].split('.')[-2:] if config.discovered_hosts else 'htb.local'
-        domain = '.'.join(domain) if isinstance(domain, list) else domain
-        
-        output_file = f"{config.output_dir}/asreproast_nousers.txt"
-        cmd = f"impacket-GetNPUsers {domain}/ -dc-ip {config.target_ip} -request -format hashcat -outputfile {output_file}"
-        
-        stdout, stderr, code = run_command(cmd, "AS-REP roast attempt", timeout=60)
-        
-        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-            console.print("[green]✓[/green] AS-REP roastable accounts found!")
-            console.print(f"[yellow]Hashes saved to: {output_file}[/yellow]")
 
 def generate_markdown_report():
     """Generate final markdown report"""
@@ -3051,7 +2914,6 @@ def main():
             run_phase(snmp_enumeration, "Phase 11: SNMP Enumeration")
             run_phase(netbios_enumeration, "Phase 11: NetBIOS Enumeration")
             run_phase(rpc_enumeration, "Phase 11: RPC Enumeration")
-            run_phase(impacket_enumeration, "Phase 11: Impacket Enumeration")
         
         # Generate final reports
         report_path = generate_markdown_report()
